@@ -1,0 +1,9 @@
+node_modules/
+dist/
+TODO.md
+.env
+.env.*
+!.env.example
+web-search.json
+*.log
+.DS_Store
