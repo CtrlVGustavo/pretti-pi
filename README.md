@@ -4,10 +4,11 @@ My personal setup for [Pi Coding Agent](https://github.com/earendil-works/pi).
 
 ## What's included
 
-| Extension | What it adds |
+| Feature | What it adds |
 | --- | --- |
 | **Worktree commands** | `/commit`, `/addworktree`, `/worktrees`, `/rmworktree`, and `/mergeworktree` for managing parallel Git work from Pi. |
 | **OpenAI web search** | A `web_search` tool backed by the OpenAI Responses API, with citations, batching, filters, and credential redaction. |
+| **Planning prompt** | `/plan <request>` asks Pi to create a reviewable plan without implementing it. |
 
 ## Installation
 
@@ -23,7 +24,7 @@ To pin the installation, append a release tag or commit—for example:
 pi install git:github.com/CtrlVGustavo/pretti-pi@v0.1.0
 ```
 
-Pi installs the package's dependencies and discovers its extensions through `package.json`. Restart Pi after installation, or use `/reload` after updating package resources during development.
+Pi installs the package's dependencies and discovers its extensions and prompts through `package.json`. Restart Pi after installation, or use `/reload` after updating package resources during development.
 
 ### Local development installation
 
@@ -63,6 +64,16 @@ The worktree commands provide a complete workflow for parallel changes:
 By default, `/mergeworktree` hands merge conflicts to the active agent for resolution. Pass `--manual` to leave conflicts unresolved for manual handling.
 
 See [the worktree command documentation](extensions/worktree-commands/README.md) for detailed behavior and recovery rules.
+
+## Planning prompt
+
+Use `/plan` followed by an unquoted request to ask Pi for a plan without starting implementation:
+
+```text
+/plan I want to add a new feature.
+```
+
+The complete request is included in the expanded prompt, even when it contains spaces.
 
 ## OpenAI web search
 
@@ -107,6 +118,8 @@ Custom Responses API endpoints must use HTTPS so bearer credentials are never se
 extensions/
 ├── openai-web-search/   # web_search implementation and configuration
 └── worktree-commands/   # Git commit and worktree slash commands
+prompts/
+└── plan.md              # Plan-only prompt template
 test/
 └── openai-web-search/   # web-search tests
 ```

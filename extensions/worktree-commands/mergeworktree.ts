@@ -355,7 +355,7 @@ export default function mergeWorktreeExtension(pi: ExtensionAPI) {
 					runGit(pi, mainPath, ["status", "--porcelain"]).then((result) => result.stdout.trim()),
 				]);
 				if (targetStatus) {
-					throw new Error(`The main worktree has uncommitted changes. Commit or discard them before merging:\n${targetStatus}`);
+					throw new Error(`The parent worktree has uncommitted changes. Commit or discard them before merging:\n${targetStatus}`);
 				}
 
 				if (sourceStatus) {
