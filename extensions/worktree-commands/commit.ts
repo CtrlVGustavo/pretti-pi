@@ -1,5 +1,6 @@
 import { complete, type Message } from "@earendil-works/pi-ai/compat";
 import type { ExecResult, ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { assertNestedWorktreesAreSafe } from "./worktree-paths.ts";
 
 const MAX_PATCH_CHARS = 100_000;
 
@@ -111,6 +112,7 @@ export async function commitAllChanges(
 	guidance = "",
 ): Promise<void> {
 	const repoRoot = (await runGit(pi, cwd, ["rev-parse", "--show-toplevel"])).stdout.trim();
+	await assertNestedWorktreesAreSafe((gitCwd, args) => pi.exec("git", args, { cwd: gitCwd }), repoRoot);
 	ctx.ui.notify("Staging all changes...", "info");
 	await runGit(pi, repoRoot, ["add", "--all"]);
 

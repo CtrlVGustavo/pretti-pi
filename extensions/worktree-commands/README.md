@@ -4,7 +4,7 @@ This extension group adds five slash commands for committing changes and creatin
 
 ## `/commit [context]`
 
-Stages every change in the current checkout, uses the active model to generate a concise subject and detailed description, and commits to the checked-out branch. Optional text provides additional context for the commit message.
+Stages every change in the current checkout, uses the active model to generate a concise subject and detailed description, and commits to the checked-out branch. Optional text provides additional context for the commit message. Before staging, it refuses to continue if a linked worktree is nested inside the checkout but is tracked or not effectively ignored.
 
 ```text
 /commit
@@ -15,7 +15,11 @@ Stages every change in the current checkout, uses the active model to generate a
 
 Creates a linked Git worktree for the required branch name and continues the current Pi session in it. Existing local branches are reused; otherwise, a branch is created from `HEAD`.
 
-Worktrees are stored in a sibling `<repository>-worktrees/` directory. If necessary, the command initializes the repository and creates an initial commit before adding the worktree.
+New worktrees are stored at `<main-worktree>/.worktrees/<branch>`, including when the command is run from another linked worktree. Existing worktrees in other locations remain supported. If necessary, the command initializes the repository and creates an initial commit before adding the worktree.
+
+The command adds `/.worktrees/` to the repository-local `.git/info/exclude`. This keeps nested checkouts out of Git status and `/commit` without changing the tracked `.gitignore`. It refuses to use `.worktrees` if the path is tracked, if an existing directory is not already ignored, or if a higher-precedence `.gitignore` rule prevents the exclusion from taking effect.
+
+Tools that do not honor Git exclusions may still scan the nested checkouts. Also, `git clean -ffdx` can delete the entire `.worktrees` directory and every worktree inside it.
 
 Examples:
 

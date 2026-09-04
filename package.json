@@ -9,6 +9,7 @@
   "type": "module",
   "scripts": {
     "test:web-search": "node --test test/openai-web-search/*.test.mjs",
+    "test:worktrees": "node --test test/worktree-commands/*.test.mjs",
     "typecheck:web-search": "tsc -p extensions/openai-web-search/tsconfig.json"
   },
   "pi": {

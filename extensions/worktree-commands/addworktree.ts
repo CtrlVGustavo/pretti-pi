@@ -1,7 +1,8 @@
 import { existsSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { SessionManager, type ExecResult, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { parseMainWorktreePath, prepareManagedWorktreesDirectory } from "./worktree-paths.ts";
 
 function commandError(args: string[], result: ExecResult): Error {
 	const output = [result.stderr.trim(), result.stdout.trim()].filter(Boolean).join("\n");
@@ -40,35 +41,49 @@ export default function addWorktreeExtension(pi: ExtensionAPI) {
 			let prepared: { worktreePath: string; targetSessionFile: string };
 
 			try {
-				if (!existsSync(join(sourceCwd, ".git"))) {
+				const repositoryResult = await pi.exec("git", ["rev-parse", "--show-toplevel"], { cwd: sourceCwd });
+				if (repositoryResult.code !== 0) {
 					await runGit(pi, sourceCwd, ["init"]);
 				}
 
-				const headResult = await pi.exec("git", ["rev-parse", "--verify", "HEAD"], { cwd: sourceCwd });
-				if (headResult.code !== 0) {
-					await runGit(pi, sourceCwd, ["add", "--all"]);
-					await runGit(pi, sourceCwd, ["commit", "--allow-empty", "-m", "init commit"]);
+				const repoRoot = (await runGit(pi, sourceCwd, ["rev-parse", "--show-toplevel"])).stdout.trim();
+				const [commonDirResult, worktreeListResult] = await Promise.all([
+					runGit(pi, repoRoot, ["rev-parse", "--git-common-dir"]),
+					runGit(pi, repoRoot, ["worktree", "list", "--porcelain", "-z"]),
+				]);
+				const mainWorktreePath = parseMainWorktreePath(worktreeListResult.stdout);
+				if (!mainWorktreePath) {
+					throw new Error("Could not identify a non-bare main worktree");
 				}
 
-				await runGit(pi, sourceCwd, ["rev-parse", "--verify", "HEAD"]);
-				await runGit(pi, sourceCwd, ["check-ref-format", "--branch", branch]);
-
-				const repoRoot = (await runGit(pi, sourceCwd, ["rev-parse", "--show-toplevel"])).stdout.trim();
-				const worktreesDir = join(dirname(repoRoot), `${basename(repoRoot) || "repo"}-worktrees`);
-				const worktreePath = join(worktreesDir, pathSegmentForBranch(branch));
-
+				await runGit(pi, repoRoot, ["check-ref-format", "--branch", branch]);
+				const targetSegment = pathSegmentForBranch(branch);
+				const worktreesDir = await prepareManagedWorktreesDirectory(
+					(cwd, gitArgs) => pi.exec("git", gitArgs, { cwd }),
+					mainWorktreePath,
+					resolve(repoRoot, commonDirResult.stdout.trim()),
+					targetSegment,
+				);
+				const worktreePath = join(worktreesDir, targetSegment);
 				if (existsSync(worktreePath)) {
 					throw new Error(`Worktree path already exists: ${worktreePath}`);
 				}
-				await mkdir(worktreesDir, { recursive: true });
+
+				const headResult = await pi.exec("git", ["rev-parse", "--verify", "HEAD"], { cwd: repoRoot });
+				if (headResult.code !== 0) {
+					await runGit(pi, repoRoot, ["add", "--all"]);
+					await runGit(pi, repoRoot, ["commit", "--allow-empty", "-m", "init commit"]);
+				}
+
+				await runGit(pi, repoRoot, ["rev-parse", "--verify", "HEAD"]);
 
 				const branchResult = await pi.exec("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], {
-					cwd: sourceCwd,
+					cwd: repoRoot,
 				});
 				if (branchResult.code === 0) {
-					await runGit(pi, sourceCwd, ["worktree", "add", worktreePath, branch]);
+					await runGit(pi, repoRoot, ["worktree", "add", worktreePath, branch]);
 				} else if (branchResult.code === 1) {
-					await runGit(pi, sourceCwd, ["worktree", "add", "-b", branch, worktreePath, "HEAD"]);
+					await runGit(pi, repoRoot, ["worktree", "add", "-b", branch, worktreePath, "HEAD"]);
 				} else {
 					throw commandError(["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], branchResult);
 				}

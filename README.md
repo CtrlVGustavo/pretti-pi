@@ -53,13 +53,15 @@ The worktree commands provide a complete workflow for parallel changes:
 | Command | Description |
 | --- | --- |
 | `/commit [context]` | Stages all changes and asks the active model to create a concise subject and detailed commit description. |
-| `/addworktree <branch>` | Creates or reuses a branch in a sibling `<repository>-worktrees/` directory and continues the current Pi session there. |
+| `/addworktree <branch>` | Creates or reuses a branch under the main checkout's `.worktrees/` directory and continues the current Pi session there. |
 | `/worktrees` | Searches worktrees and their Pi sessions, then resumes the selected session. Supports fuzzy terms, quoted phrases, and `re:` regular expressions. |
 | `/rmworktree` | Removes a linked worktree after confirmation while retaining its branch. |
 | `/mergeworktree [--manual]` | Commits pending work, merges it into the main worktree's branch, and cleans up the linked worktree and merged branch. |
 
 > [!WARNING]
 > `/rmworktree` force-removes the selected worktree. Its uncommitted, untracked, and ignored files are permanently deleted after confirmation.
+
+New worktrees are stored at `<main-worktree>/.worktrees/<branch>`. The command adds `/.worktrees/` to the repository-local `.git/info/exclude`, so the main branch does not track the nested checkouts and no `.gitignore` change is committed. Existing worktrees in other locations remain supported. Tools that do not honor Git exclusions may still scan `.worktrees/`, and `git clean -ffdx` can delete the entire directory.
 
 By default, `/mergeworktree` hands merge conflicts to the active agent for resolution. Pass `--manual` to leave conflicts unresolved for manual handling.
 
@@ -121,7 +123,8 @@ extensions/
 prompts/
 └── plan.md              # Plan-only prompt template
 test/
-└── openai-web-search/   # web-search tests
+├── openai-web-search/   # web-search tests
+└── worktree-commands/   # worktree path and safety tests
 ```
 ## License
 
