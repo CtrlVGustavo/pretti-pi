@@ -27,17 +27,20 @@ Examples:
 /addworktree feature/my-change
 ```
 
-## `/worktrees`
+## `/worktrees [--list]`
 
-Opens an interactive picker containing the current repository's usable worktrees and their Pi sessions. Select a session to resume it, or select a worktree without sessions to create a new session there.
+Without arguments, opens an interactive picker containing the current repository's usable worktrees and their Pi sessions. Select a session to resume it, or select a worktree without sessions to create a new session there.
 
 Search supports fuzzy terms, quoted exact phrases, and case-insensitive regular expressions prefixed with `re:`. It searches worktree details and session metadata and message text.
 
+Pass `--list` to print each usable worktree's branch, full path, and applicable status labels without indexing sessions or opening the picker.
+
 ```text
 /worktrees
+/worktrees --list
 ```
 
-This command requires Pi's interactive TUI mode.
+The interactive picker requires Pi's TUI mode; list mode is also available through RPC.
 
 ## `/rmworktree`
 
