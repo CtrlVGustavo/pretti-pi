@@ -18,6 +18,9 @@
     ],
     "prompts": [
       "./prompts"
+    ],
+    "skills": [
+      "./skills"
     ]
   },
   "devDependencies": {
