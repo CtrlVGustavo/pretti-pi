@@ -15,7 +15,7 @@ Stages every change in the current checkout, uses the active model to generate a
 
 Creates a linked Git worktree for the required branch name and continues the current Pi session in it. Existing local branches are reused; otherwise, a branch is created from `HEAD`.
 
-New worktrees are stored at `<main-worktree>/.worktrees/<branch>`, including when the command is run from another linked worktree. Existing worktrees in other locations remain supported. If necessary, the command initializes the repository and creates an initial commit before adding the worktree.
+New worktrees are stored at `<main-worktree>/.worktrees/<branch>`, including when the command is run from another linked worktree. Existing worktrees in other locations remain supported for resuming and merging, but cannot be removed with `/rmworktree`. If necessary, the command initializes the repository and creates an initial commit before adding the worktree.
 
 The command adds `/.worktrees/` to the repository-local `.git/info/exclude`. This keeps nested checkouts out of Git status and `/commit` without changing the tracked `.gitignore`. It refuses to use `.worktrees` if the path is tracked, if an existing directory is not already ignored, or if a higher-precedence `.gitignore` rule prevents the exclusion from taking effect.
 
@@ -42,16 +42,25 @@ Pass `--list` to print each usable worktree's branch, full path, and applicable 
 
 The interactive picker requires Pi's TUI mode; list mode is also available through RPC.
 
-## `/rmworktree`
+## `/rmworktree [worktree]`
 
-Abandons a linked worktree without deleting its branch. The worktree folder and Git registration are removed with force, so all uncommitted, untracked, and ignored files in it are permanently deleted after confirmation.
+Abandons a registered linked worktree **inside `<main-worktree>/.worktrees/`** without deleting its branch. The worktree folder and Git registration are removed with force, so all uncommitted, untracked, and ignored files in it are permanently deleted after confirmation.
 
-When run from a linked worktree, Pi first switches the current session to the repository's main worktree and then removes the old worktree. The removal is cancelled if the session switch is cancelled.
+The optional positional target accepts an exact branch name, unique directory name, or registered worktree path (absolute or relative to the current working directory). Quote paths containing spaces. Unknown or ambiguous targets are rejected; use an explicit path to disambiguate. There are no flags.
 
-When run from the main worktree, an interactive picker lists the repository's linked worktrees. Select one and confirm its removal. This selection flow requires Pi's interactive TUI mode.
+Type `/rmworktree ` to autocomplete eligible worktrees, then type a prefix to filter suggestions. Suggestions show names and paths, and insert an unambiguous target. The main checkout and outside, missing, or prunable worktrees are never offered.
+
+Without a target, running from a linked worktree removes the current worktree; running from the main checkout opens a picker of eligible worktrees. The picker requires Pi's interactive TUI mode.
+
+Removing the current worktree first switches the session to the main checkout; cancelling the switch cancels removal. Removing another worktree leaves the current session and checkout unchanged. Confirmation is always required (TUI or RPC).
+
+The `.worktrees/` restriction applies to explicit targets, the picker, and no-argument removal. Nested paths such as `.worktrees/feature/login` are supported. Canonical paths are checked again before deletion; symlink escapes and redirected `.worktrees` roots are rejected.
 
 ```text
 /rmworktree
+/rmworktree feature/login
+/rmworktree ./.worktrees/feature/login
+/rmworktree "/path/to/repo/.worktrees/review copy"
 ```
 
 ## `/mergeworktree [--manual]`

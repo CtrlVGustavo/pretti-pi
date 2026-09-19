@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, realpath, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
@@ -11,15 +11,16 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Container, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
 
-interface WorktreeEntry {
-	path: string;
-	head: string;
-	branch?: string;
-	bare: boolean;
-	detached: boolean;
-	locked: boolean;
-	prunable: boolean;
-}
+import {
+	assertManagedWorktree,
+	branchName,
+	managedWorktrees,
+	parseRemovalArgs,
+	parseWorktrees,
+	removalCompletions,
+	resolveRemovalTarget,
+	type WorktreeEntry,
+} from "./rmworktree-core.ts";
 
 function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
@@ -69,51 +70,6 @@ async function canonicalPath(path: string): Promise<string> {
 	} catch {
 		return resolve(path);
 	}
-}
-
-function parseWorktrees(output: string): WorktreeEntry[] {
-	return output
-		.split("\0\0")
-		.filter(Boolean)
-		.map((record) => {
-			const entry: WorktreeEntry = {
-				path: "",
-				head: "",
-				bare: false,
-				detached: false,
-				locked: false,
-				prunable: false,
-			};
-
-			for (const field of record.split("\0")) {
-				if (field.startsWith("worktree ")) {
-					entry.path = field.slice("worktree ".length);
-				} else if (field.startsWith("HEAD ")) {
-					entry.head = field.slice("HEAD ".length);
-				} else if (field.startsWith("branch ")) {
-					entry.branch = field.slice("branch ".length);
-				} else if (field === "bare") {
-					entry.bare = true;
-				} else if (field === "detached") {
-					entry.detached = true;
-				} else if (field === "locked" || field.startsWith("locked ")) {
-					entry.locked = true;
-				} else if (field === "prunable" || field.startsWith("prunable ")) {
-					entry.prunable = true;
-				}
-			}
-
-			return entry;
-		})
-		.filter((entry) => entry.path);
-}
-
-function branchName(worktree: WorktreeEntry): string {
-	const prefix = "refs/heads/";
-	if (worktree.branch?.startsWith(prefix)) {
-		return worktree.branch.slice(prefix.length);
-	}
-	return worktree.detached ? `(detached ${worktree.head.slice(0, 8)})` : "(no branch)";
 }
 
 function retentionMessage(worktree: WorktreeEntry): string {
@@ -211,7 +167,8 @@ async function findRemovalTarget(mainPath: string, targetPath: string): Promise<
 	const canonicalTarget = await canonicalPath(targetPath);
 	for (let index = 1; index < worktrees.length; index++) {
 		const worktree = worktrees[index];
-		if (!worktree.bare && (await canonicalPath(worktree.path)) === canonicalTarget) {
+		if (resolve(worktree.path) === resolve(targetPath) && (await canonicalPath(worktree.path)) === canonicalTarget) {
+			assertManagedWorktree(mainPath, worktree);
 			return worktree;
 		}
 	}
@@ -230,18 +187,43 @@ async function removeLinkedWorktree(mainPath: string, targetPath: string): Promi
 }
 
 export default function rmWorktreeExtension(pi: ExtensionAPI) {
+	let completionCwd: string | undefined;
+	pi.on("session_start", (_event, ctx) => {
+		completionCwd = ctx.cwd;
+	});
+	pi.on("session_shutdown", () => {
+		completionCwd = undefined;
+	});
+
 	pi.registerCommand("rmworktree", {
-		description: "Abandon a linked Git worktree and return to the main worktree",
+		description: "Remove a worktree inside the main checkout's .worktrees/ (optional name or path)",
+		getArgumentCompletions: (prefix) => {
+			if (!completionCwd) return null;
+			try {
+				// This API is synchronous. Query local Git with a deadline rather than
+				// caching registrations that other Pi sessions or terminals can change.
+				const output = execFileSync("git", ["worktree", "list", "--porcelain", "-z"], {
+					cwd: completionCwd, encoding: "utf8", timeout: 1000, stdio: ["ignore", "pipe", "pipe"],
+				});
+				return removalCompletions(prefix, completionCwd, parseWorktrees(output));
+			} catch {
+				return null;
+			}
+		},
 		handler: async (args, ctx) => {
-			if (args.trim()) {
-				ctx.ui.notify("Usage: /rmworktree", "error");
+			completionCwd = ctx.cwd;
+			let target: string | undefined;
+			try {
+				target = parseRemovalArgs(args);
+			} catch (error) {
+				ctx.ui.notify(errorMessage(error), "error");
 				return;
 			}
 			await ctx.waitForIdle();
 
 			let mainPath: string;
 			let selected: WorktreeEntry;
-			let currentIsMain: boolean;
+			let removingCurrent: boolean;
 			try {
 				const [repoRootResult, gitDirResult, commonDirResult, worktreeListResult] = await Promise.all([
 					runGit(pi, ctx.cwd, ["rev-parse", "--show-toplevel"]),
@@ -253,7 +235,7 @@ export default function rmWorktreeExtension(pi: ExtensionAPI) {
 				const repoRoot = await canonicalPath(repoRootResult.stdout.trim());
 				const gitDir = await canonicalPath(gitDirResult.stdout.trim());
 				const commonDir = await canonicalPath(resolve(ctx.cwd, commonDirResult.stdout.trim()));
-				currentIsMain = gitDir === commonDir;
+				const currentIsMain = gitDir === commonDir;
 
 				const worktrees = parseWorktrees(worktreeListResult.stdout);
 				const main = worktrees[0];
@@ -273,15 +255,15 @@ export default function rmWorktreeExtension(pi: ExtensionAPI) {
 					throw new Error("Git reported inconsistent main-worktree information; removal was cancelled");
 				}
 
-				if (currentIsMain) {
+				if (target !== undefined) {
+					selected = resolveRemovalTarget(target, ctx.cwd, worktrees);
+				} else if (currentIsMain) {
 					if (ctx.mode !== "tui") {
 						throw new Error("Run /rmworktree in interactive mode to select a linked worktree");
 					}
-					const linked = worktrees.slice(1).filter(
-						(worktree) => !worktree.bare && !worktree.prunable && existsSync(worktree.path),
-					);
+					const linked = managedWorktrees(worktrees);
 					if (linked.length === 0) {
-						throw new Error("No linked worktrees are available to remove");
+						throw new Error("No linked worktrees inside the main checkout's .worktrees/ are available to remove");
 					}
 					const choice = await selectLinkedWorktree(linked, ctx);
 					if (!choice) {
@@ -294,6 +276,8 @@ export default function rmWorktreeExtension(pi: ExtensionAPI) {
 						throw new Error("Could not identify the current linked worktree");
 					}
 				}
+				assertManagedWorktree(mainPath, selected);
+				removingCurrent = (await canonicalPath(selected.path)) === repoRoot;
 			} catch (error) {
 				ctx.ui.notify(errorMessage(error), "error");
 				return;
@@ -325,7 +309,7 @@ export default function rmWorktreeExtension(pi: ExtensionAPI) {
 				return;
 			}
 
-			if (currentIsMain) {
+			if (!removingCurrent) {
 				try {
 					const removed = await removeLinkedWorktree(mainPath, selected.path);
 					ctx.ui.notify(`Removed ${removed.path}${removalSummary(removed)}`, "info");
