@@ -54,7 +54,7 @@ The worktree commands provide a complete workflow for parallel changes:
 | --- | --- |
 | `/commit [context]` | Stages all changes and asks the active model to create a concise subject and detailed commit description. |
 | `/addworktree <branch>` | Creates or reuses a branch under the main checkout's `.worktrees/` directory and continues the current Pi session there. |
-| `/worktrees` | Searches worktrees and their Pi sessions, then resumes the selected session. Supports fuzzy terms, quoted phrases, and `re:` regular expressions. |
+| `/worktrees [--list]` | Searches worktrees and their Pi sessions, then resumes the selected session. Use `--list` to print the worktrees without opening the picker. Supports fuzzy terms, quoted phrases, and `re:` regular expressions. |
 | `/rmworktree` | Removes a linked worktree after confirmation while retaining its branch. |
 | `/mergeworktree [--manual]` | Commits pending work, merges it into the main worktree's branch, and cleans up the linked worktree and merged branch. |
 
@@ -124,7 +124,7 @@ prompts/
 └── plan.md              # Plan-only prompt template
 test/
 ├── openai-web-search/   # web-search tests
-└── worktree-commands/   # worktree path and safety tests
+└── worktree-commands/   # worktree behavior and safety tests
 ```
 ## License
 

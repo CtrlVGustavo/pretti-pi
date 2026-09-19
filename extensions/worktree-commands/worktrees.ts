@@ -11,19 +11,15 @@ import {
 	type Theme,
 } from "@earendil-works/pi-coding-agent";
 import { fuzzyMatch, Input, type Component, type Focusable, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-
-interface WorktreeEntry {
-	path: string;
-	head: string;
-	branch?: string;
-	bare: boolean;
-	detached: boolean;
-	locked: boolean;
-	prunable: boolean;
-	main: boolean;
-	current: boolean;
-	sessions?: SessionInfo[];
-}
+import {
+	branchName,
+	formatWorktreeList,
+	parseWorktrees,
+	parseWorktreesCommandArgs,
+	type WorktreeEntry,
+	type WorktreesCommandMode,
+	worktreeStatusLabels,
+} from "./worktrees-core.ts";
 
 interface SearchToken {
 	kind: "fuzzy" | "phrase";
@@ -73,62 +69,8 @@ async function canonicalPath(path: string): Promise<string> {
 	}
 }
 
-function parseWorktrees(output: string): WorktreeEntry[] {
-	return output
-		.split("\0\0")
-		.filter(Boolean)
-		.map((record, index) => {
-			const entry: WorktreeEntry = {
-				path: "",
-				head: "",
-				bare: false,
-				detached: false,
-				locked: false,
-				prunable: false,
-				main: index === 0,
-				current: false,
-			};
-
-			for (const field of record.split("\0")) {
-				if (field.startsWith("worktree ")) {
-					entry.path = field.slice("worktree ".length);
-				} else if (field.startsWith("HEAD ")) {
-					entry.head = field.slice("HEAD ".length);
-				} else if (field.startsWith("branch ")) {
-					entry.branch = field.slice("branch ".length);
-				} else if (field === "bare") {
-					entry.bare = true;
-				} else if (field === "detached") {
-					entry.detached = true;
-				} else if (field === "locked" || field.startsWith("locked ")) {
-					entry.locked = true;
-				} else if (field === "prunable" || field.startsWith("prunable ")) {
-					entry.prunable = true;
-				}
-			}
-
-			return entry;
-		})
-		.filter((entry) => entry.path && !entry.bare && !entry.prunable && existsSync(entry.path));
-}
-
-function branchName(worktree: WorktreeEntry): string {
-	const prefix = "refs/heads/";
-	if (worktree.branch?.startsWith(prefix)) {
-		return worktree.branch.slice(prefix.length);
-	}
-	return worktree.detached ? `(detached ${worktree.head.slice(0, 8)})` : "(no branch)";
-}
-
 function worktreeSearchText(worktree: WorktreeEntry): string {
-	const statuses = [
-		worktree.main ? "main" : "",
-		worktree.current ? "current" : "",
-		worktree.detached ? "detached" : "",
-		worktree.locked ? "locked" : "",
-	]
-		.filter(Boolean)
-		.join(" ");
+	const statuses = worktreeStatusLabels(worktree).join(" ");
 	return `${branchName(worktree)} ${worktree.branch ?? ""} ${basename(worktree.path)} ${worktree.path} ${worktree.head} ${statuses}`;
 }
 
@@ -361,12 +303,7 @@ class WorktreeSelector implements Component, Focusable {
 	}
 
 	private statusLabels(worktree: WorktreeEntry): string {
-		const labels = [
-			worktree.main ? "main" : "",
-			worktree.current ? "current" : "",
-			worktree.detached ? "detached" : "",
-			worktree.locked ? "locked" : "",
-		].filter(Boolean);
+		const labels = worktreeStatusLabels(worktree);
 		return labels.length > 0 ? ` [${labels.join(", ")}]` : "";
 	}
 
@@ -504,10 +441,25 @@ async function createSessionFile(targetCwd: string): Promise<string> {
 
 export default function worktreesExtension(pi: ExtensionAPI) {
 	pi.registerCommand("worktrees", {
-		description: "Search worktrees and their Pi sessions, then resume one",
-		handler: async (_args, ctx) => {
-			if (ctx.mode !== "tui") {
-				ctx.ui.notify("worktrees requires interactive mode", "error");
+		description: "List worktrees or search their Pi sessions and resume one",
+		getArgumentCompletions: (prefix) => {
+			const value = "--list";
+			const query = prefix.trimStart();
+			return value.startsWith(query)
+				? [{ value, label: value, description: "Print the repository's worktrees without opening the picker" }]
+				: null;
+		},
+		handler: async (args, ctx) => {
+			let mode: WorktreesCommandMode;
+			try {
+				mode = parseWorktreesCommandArgs(args);
+			} catch (error) {
+				ctx.ui.notify(errorMessage(error), "error");
+				return;
+			}
+
+			if (mode === "picker" && ctx.mode !== "tui") {
+				ctx.ui.notify("worktrees requires interactive mode unless --list is used", "error");
 				return;
 			}
 			await ctx.waitForIdle();
@@ -530,6 +482,11 @@ export default function worktreesExtension(pi: ExtensionAPI) {
 				}
 			} catch (error) {
 				ctx.ui.notify(errorMessage(error), "error");
+				return;
+			}
+
+			if (mode === "list") {
+				ctx.ui.notify(formatWorktreeList(worktrees), "info");
 				return;
 			}
 
