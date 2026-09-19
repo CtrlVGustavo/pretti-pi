@@ -9,6 +9,7 @@ My personal setup for [Pi Coding Agent](https://github.com/earendil-works/pi).
 | **Worktree commands** | `/commit`, `/addworktree`, `/worktrees`, `/rmworktree`, and `/mergeworktree` for managing parallel Git work from Pi. |
 | **OpenAI web search** | A `web_search` tool backed by the OpenAI Responses API, with citations, batching, filters, and credential redaction. |
 | **Planning prompt** | `/plan <request>` asks Pi to create a reviewable plan without implementing it. |
+| **Code cards** | Syntax-highlighted code previews with readable slugs, `/code` autocomplete, and user-controlled Neovim editing. |
 
 ## Installation
 
@@ -67,6 +68,24 @@ By default, `/mergeworktree` hands merge conflicts to the active agent for resol
 
 See [the worktree command documentation](extensions/worktree-commands/README.md) for detailed behavior and recovery rules.
 
+## Code cards
+
+Ask Pi to show a code card for a file or snippet. Cards have a syntax-highlighted snapshot, a descriptive slug, and a short ID. Once Pi is idle, open one in Neovim:
+
+```text
+/code index-hash-detect
+/code a101ca00
+/code src/index.ts:42
+```
+
+Type `/code ` to see available cards, or type part of a slug or ID to filter suggestions. `/code` alone opens a picker; `/code --last` opens the latest card. Completing a reference only fills the command—it does not open the editor.
+
+Cards and their slugs persist across reloads and resumes. References and suggestions are scoped to the current conversation branch. Slug collisions get numeric suffixes such as `index-hash-detect-2`. Older cards remain accessible by bare ID, and old `#id` commands still work. If a filename matches a card reference, use an explicit path such as `./index-hash-detect`.
+
+Opening a card uses the **current file**, not its preview snapshot. `:wq` saves and returns to Pi; changes to the opened file are reported without automatically starting an assistant turn. Neovim (`nvim`) must be on `PATH`, and opening cards requires Pi's interactive TUI.
+
+Highlighting uses the active Pi theme and falls back to plain text for unknown languages or errors. It operates on the bounded preview, so snippets beginning inside multiline strings or comments may lack complete syntax context. Previews remain limited to 12 lines of 240 characters (plus an ellipsis when truncated); files must be UTF-8 text up to 2 MiB.
+
 ## Planning prompt
 
 Use `/plan` followed by an unquoted request to ask Pi for a plan without starting implementation:
@@ -118,11 +137,13 @@ Custom Responses API endpoints must use HTTPS so bearer credentials are never se
 
 ```text
 extensions/
+├── code-cards/          # Code previews, references, and Neovim handoff
 ├── openai-web-search/   # web_search implementation and configuration
 └── worktree-commands/   # Git commit and worktree slash commands
 prompts/
 └── plan.md              # Plan-only prompt template
 test/
+├── code-cards/          # Card rendering, completion, and editor safety tests
 ├── openai-web-search/   # web-search tests
 └── worktree-commands/   # worktree behavior and safety tests
 ```
