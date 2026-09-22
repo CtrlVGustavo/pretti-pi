@@ -38,6 +38,10 @@ Existing tasks without metadata receive persistent slug comments on first succes
 
 Flag completion suggests `--all`, `--unchecked`, `--check`, and `--cleardone`. After `--check `, completion suggests unchecked slugs with task descriptions and filters by the typed prefix. It reads the current file each time, so manual edits and checks are reflected without reload. Completion never creates or writes the file; untagged tasks use the same provisional slugs that command execution will persist. If the file changes between completion and execution, the command operates on the current file.
 
+## Planning from tasks
+
+Use `/plan --todo <slug> [extra text]` to request a plan for a task, or `/plan --todo --all [extra text]` for all unchecked tasks. `/plan --todo ` autocompletes unchecked slugs and `--all`; explicitly typing a checked slug is still allowed. Unlike `/todo`, `/plan` never creates or annotates TODO.md, even for tasks with provisional slugs. See [the plan command documentation](../plan/README.md) or run `/plan --help`.
+
 ## Markdown preservation
 
 This is a line-based task list, not a full Markdown document editor:

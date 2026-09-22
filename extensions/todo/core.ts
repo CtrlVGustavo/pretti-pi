@@ -37,13 +37,17 @@ export function safeText(text: string): string {
 	return text.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "").replace(/\t/g, "    ");
 }
 
+export function isTodoSlug(value: string): boolean {
+	return SLUG.test(value);
+}
+
 export function parseTodoCommand(args: string): TodoCommand {
 	const value = args.trim();
 	if (!value || value === "--unchecked") return { kind: "list", all: false };
 	if (value === "--all") return { kind: "list", all: true };
 	if (value === "--cleardone") return { kind: "cleardone" };
 	const check = /^--check\s+(\S+)$/.exec(value);
-	if (check && SLUG.test(check[1])) return { kind: "check", slug: check[1] };
+	if (check && isTodoSlug(check[1])) return { kind: "check", slug: check[1] };
 	const literal = /^--\s+([\s\S]+)$/.exec(value);
 	if (!literal && value.startsWith("--")) throw new Error(USAGE);
 	const text = (literal?.[1] ?? value).trim();

@@ -8,7 +8,7 @@ My personal setup for [Pi Coding Agent](https://github.com/earendil-works/pi).
 | --- | --- |
 | **Worktree commands** | `/commit`, `/addworktree`, `/worktrees`, `/rmworktree`, and `/mergeworktree` for managing parallel Git work from Pi. |
 | **OpenAI web search** | A `web_search` tool backed by the OpenAI Responses API, with citations, batching, filters, and credential redaction. |
-| **Planning prompt** | `/plan <request>` asks Pi to create a reviewable plan without implementing it. |
+| **Plan command** | `/plan <request>` or `/plan --todo <slug>` creates a reviewable plan, with unchecked TODO completion and `--all` support. |
 | **Code cards** | Syntax-highlighted code previews with readable slugs, `/code` autocomplete, and user-controlled Neovim editing. |
 | **Todo command** | `/todo` lists, adds, checks, and clears tasks in `TODO.md`, with stable slugs and completion. |
 
@@ -124,15 +124,30 @@ Existing checkbox tasks receive missing slug comments on first use. Stored slugs
 
 See [the todo documentation](extensions/todo/README.md) for parsing, preservation, and error behavior.
 
-## Planning prompt
+## Plan command
 
-Use `/plan` followed by an unquoted request to ask Pi for a plan without starting implementation:
+Use `/plan` to request a reviewable plan without implementation:
 
 ```text
 /plan I want to add a new feature.
+/plan --todo fix-login-redirect Focus on regression tests.
+/plan --todo --all Group related tasks into milestones.
+/plan --help
 ```
 
-The complete request is included in the expanded prompt, even when it contains spaces.
+| Command | Description |
+| --- | --- |
+| `/plan <request>` | Send the original planning instructions followed by the complete request. |
+| `/plan --todo <slug> [extra text]` | Include the matching TODO task and optional additional instructions. |
+| `/plan --todo --all [extra text]` | Include all **unchecked** tasks in file order, plus optional additional instructions. |
+| `/plan -- <request>` | Treat the request literally, even if it starts with a flag. |
+| `/plan --help` | Explain usage and every flag without starting an assistant turn. |
+
+A bare `/plan` or `/plan --todo` reports an error explaining what to provide. `--all` is only valid after `--todo`; no unchecked tasks is an error. Requests and extra text can contain spaces and newlines without quotes.
+
+Type `/plan --todo ` to autocomplete unchecked slugs or `--all`. Checked tasks are never suggested, but an explicitly typed checked slug is accepted. TODO lookup uses only the current directory's `TODO.md` and never modifies it. When busy, Pi queues the expanded prompt as a follow-up.
+
+This command supplies planning instructions, not an enforced read-only mode. See [the plan documentation](extensions/plan/README.md) for prompt formatting, parsing, and error behavior.
 
 ## OpenAI web search
 
@@ -177,14 +192,14 @@ Custom Responses API endpoints must use HTTPS so bearer credentials are never se
 extensions/
 ├── code-cards/          # Code previews, references, and Neovim handoff
 ├── openai-web-search/   # web_search implementation and configuration
-├── todo/                # TODO.md slash command and slug completion
+├── plan/               # Planning command, TODO selection, and help
+├── todo/               # TODO.md slash command and slug completion
 └── worktree-commands/   # Git commit and worktree slash commands
-prompts/
-└── plan.md              # Plan-only prompt template
 test/
 ├── code-cards/          # Card rendering, completion, and editor safety tests
 ├── openai-web-search/   # web-search tests
-├── todo/                # Task parsing, file operations, and completion tests
+├── plan/               # Prompt composition, TODO lookup, and completion tests
+├── todo/               # Task parsing, file operations, and completion tests
 └── worktree-commands/   # worktree behavior and safety tests
 ```
 ## License
