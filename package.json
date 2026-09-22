@@ -11,6 +11,8 @@
     "test:web-search": "node --test test/openai-web-search/*.test.mjs",
     "test:worktrees": "node --test test/worktree-commands/*.test.mjs",
     "test:code-cards": "node --test test/code-cards/*.test.mjs",
+    "test:todo": "node --test test/todo/*.test.mjs",
+    "typecheck:todo": "tsc -p extensions/todo/tsconfig.json",
     "typecheck:code-cards": "tsc -p extensions/code-cards/tsconfig.json",
     "typecheck:web-search": "tsc -p extensions/openai-web-search/tsconfig.json"
   },

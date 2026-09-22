@@ -10,6 +10,7 @@ My personal setup for [Pi Coding Agent](https://github.com/earendil-works/pi).
 | **OpenAI web search** | A `web_search` tool backed by the OpenAI Responses API, with citations, batching, filters, and credential redaction. |
 | **Planning prompt** | `/plan <request>` asks Pi to create a reviewable plan without implementing it. |
 | **Code cards** | Syntax-highlighted code previews with readable slugs, `/code` autocomplete, and user-controlled Neovim editing. |
+| **Todo command** | `/todo` lists, adds, checks, and clears tasks in `TODO.md`, with stable slugs and completion. |
 
 ## Installation
 
@@ -86,6 +87,41 @@ Opening a card uses the **current file**, not its preview snapshot. `:wq` saves 
 
 Highlighting uses the active Pi theme and falls back to plain text for unknown languages or errors. It operates on the bounded preview, so snippets beginning inside multiline strings or comments may lack complete syntax context. Previews remain limited to 12 lines of 240 characters (plus an ellipsis when truncated); files must be UTF-8 text up to 2 MiB.
 
+## Todo command
+
+Manage `TODO.md` in Pi's current working directory without starting an assistant turn:
+
+```text
+/todo Fix login redirect
+/todo
+/todo --check fix-login-redirect
+/todo --all
+/todo --cleardone
+```
+
+| Command | Description |
+| --- | --- |
+| `/todo` or `/todo --unchecked` | Show unchecked items and their slugs. |
+| `/todo --all` | Show checked and unchecked items in file order. |
+| `/todo <text>` | Append one unchecked item; spaces need no quotes. |
+| `/todo --check <slug>` | Check the exact matching item. Already checked items stay checked. |
+| `/todo --cleardone` | Remove checked task lines, preserving notes and unchecked subtasks. |
+| `/todo -- <text>` | Add literal text beginning with `--`. |
+
+Type `/todo --check ` to autocomplete unchecked slugs; typing a slug prefix narrows the suggestions. Completion only fills the command, never executes it or modifies the file.
+
+Listing creates a missing `TODO.md` and prints `TODO.md is empty.` Adding creates the file and adds the task immediately. No parent-directory search is performed, so each worktree has its own file. Results appear inline in Pi without entering model context; RPC clients receive notifications.
+
+Tasks use normal Markdown checkboxes with stable slug comments:
+
+```markdown
+- [ ] Fix login redirect <!-- todo:fix-login-redirect -->
+```
+
+Existing checkbox tasks receive missing slug comments on first use. Repeated text gets suffixes such as `fix-login-redirect-2`, and editing task text does not change its stored slug. The file is read afresh for every command, including completion.
+
+See [the todo documentation](extensions/todo/README.md) for parsing, preservation, and error behavior.
+
 ## Planning prompt
 
 Use `/plan` followed by an unquoted request to ask Pi for a plan without starting implementation:
@@ -139,12 +175,14 @@ Custom Responses API endpoints must use HTTPS so bearer credentials are never se
 extensions/
 ├── code-cards/          # Code previews, references, and Neovim handoff
 ├── openai-web-search/   # web_search implementation and configuration
+├── todo/                # TODO.md slash command and slug completion
 └── worktree-commands/   # Git commit and worktree slash commands
 prompts/
 └── plan.md              # Plan-only prompt template
 test/
 ├── code-cards/          # Card rendering, completion, and editor safety tests
 ├── openai-web-search/   # web-search tests
+├── todo/                # Task parsing, file operations, and completion tests
 └── worktree-commands/   # worktree behavior and safety tests
 ```
 ## License
