@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { CombinedAutocompleteProvider } from "@earendil-works/pi-tui";
-import { CARD_TYPE } from "../../extensions/code-cards/core.ts";
+import { CARD_TYPE, OPEN_TYPE } from "../../extensions/code-cards/core.ts";
 import { createCodeCardsExtension } from "../../extensions/code-cards/index.ts";
 
 async function setup(t, open) {
@@ -14,10 +14,12 @@ async function setup(t, open) {
 	await writeFile(path, "first\nconst timeout = 1000;\nlast\n");
 	const tools = new Map(), commands = new Map(), events = new Map();
 	const entries = [], messages = [], notifications = [], launches = [], confirmations = [];
+	let provider;
 	const ctx = {
 		cwd, mode: "tui", isIdle: () => true,
 		sessionManager: { getBranch: () => entries },
 		ui: {
+			addAutocompleteProvider: (factory) => { provider = factory(new CombinedAutocompleteProvider([{ name: "code", ...commands.get("code") }], ctx.cwd)); },
 			notify: (text, level) => notifications.push({ text, level }),
 			select: async (_title, items) => items[0],
 			confirm: async (...args) => { confirmations.push(args); return true; },
@@ -42,7 +44,7 @@ async function setup(t, open) {
 	const show = (params = {}) => tools.get("show_code_card").execute("tool-id", { path, line: 2, ...params }, undefined, undefined, ctx);
 	const command = (args) => commands.get("code").handler(args, ctx);
 	const complete = (prefix = "") => commands.get("code").getArgumentCompletions(prefix);
-	return { cwd, path, ctx, entries, messages, notifications, launches, confirmations, tools, commands, events, initialize, show, command, complete };
+	return { cwd, path, ctx, entries, messages, notifications, launches, confirmations, tools, commands, events, initialize, show, command, complete, get provider() { return provider; } };
 }
 
 test("tool persists a card without opening nvim; command edits and reports without triggering a turn", async (t) => {
@@ -68,7 +70,9 @@ test("direct file invocation, picker, and --last open current files; unchanged e
 	const f = await setup(t);
 	await f.command('"source file.ts":2:4');
 	assert.equal(f.entries.length, 1);
+	assert.equal(f.entries[0].customType, OPEN_TYPE);
 	assert.equal(f.launches[0].column, 4);
+	await f.show();
 	await f.command("");
 	await f.command("--last");
 	assert.equal(f.launches.length, 3);
@@ -185,7 +189,7 @@ test("slugs and bare IDs open the same card; legacy #id remains supported", asyn
 		assert.equal(f.launches.at(-1).path, f.path);
 	}
 	assert.equal(f.launches.length, 4);
-	assert.equal(f.entries.length, 1);
+	assert.equal(f.entries.filter((entry) => entry.customType === CARD_TYPE).length, 1);
 	assert.equal(f.messages.length, 0);
 	await f.command("index-hash");
 	await f.command("unknown-card-name");
@@ -205,8 +209,8 @@ test("slug collisions are resolved at persistence even for parallel tool calls",
 	// Fallback slugs follow the same collision rules.
 	const titled = await f.show({ title: "Detect changes" });
 	assert.equal(titled.details.slug, "detect-changes-4");
-	await f.command('"source file.ts":2');
-	await f.command('"source file.ts":2');
+	await f.show();
+	await f.show();
 	assert.equal(f.entries.at(-2).data.slug, "source-file-2");
 	assert.equal(f.entries.at(-1).data.slug, "source-file-2-2");
 });
@@ -239,7 +243,7 @@ test("completion lists newest slugs and legacy IDs, filters both, and never laun
 	assert.equal(f.complete("index-")[0].description, "source file.ts:2 · Detect changes\\u001b[2J now");
 	assert.ok(f.complete(first.details.cardId.slice(0, 3).toUpperCase()).some((item) => item.value === first.details.cardId));
 	assert.ok(f.complete(`#${first.details.cardId.slice(0, 3)}`).some((item) => item.value === first.details.cardId));
-	assert.deepEqual(f.complete("--").map((item) => item.value), ["--last"]);
+	assert.deepEqual(f.complete("--").map((item) => item.value), ["--last", "--file "]);
 	for (const query of ["unknown-card", "./source", '"source', "source file.ts", "--unknown"]) {
 		assert.equal(f.complete(query), null);
 	}
@@ -325,11 +329,206 @@ test("picker and edit notifications use readable references without # prefixes",
 	assert.match(f.messages[0].content, /reopen with \/code index-hash-detect/);
 });
 
+test("--last follows files, newly shown cards, and reopened older cards in interaction order", async (t) => {
+	const f = await setup(t, async (_ctx, target) => { await writeFile(target.path, "edited\n"); });
+	await f.command('--file "source file.ts":2:4');
+	assert.equal(f.launches[0].line, 2);
+	assert.equal(f.launches[0].column, 4);
+	assert.equal(f.entries[0].customType, OPEN_TYPE);
+	assert.equal(f.messages[0].options.triggerTurn, false);
+	assert.match(f.messages[0].content, /reopen with \/code --file ".*source file.ts"/);
+	await f.command("--last");
+	assert.equal(f.launches.length, 2);
+	assert.equal(f.launches.at(-1).path, f.path);
+	assert.equal(f.launches.at(-1).line, 1); // The edit shortened the file; clamp rather than fail.
+	assert.equal(f.launches.at(-1).column, 4);
+	assert.equal(f.entries.filter((entry) => entry.customType === CARD_TYPE).length, 0);
+	assert.equal(f.complete(), null); // Direct file history never becomes a card suggestion.
+	const card = await f.show({ line: 1, slug: "source-card" });
+	await f.command("--last");
+	assert.equal(f.launches.at(-1).path, f.path);
+	assert.equal(f.entries.at(-1).data.id, card.details.cardId);
+	await writeFile(join(f.cwd, "source-card"), "literal\n");
+	await f.command("--file source-card");
+	await f.command("--last");
+	assert.equal(f.launches.at(-1).path, join(f.cwd, "source-card"));
+	assert.equal(f.entries.filter((entry) => entry.customType === CARD_TYPE).length, 1);
+	await f.show({ path: join(f.cwd, "source-card"), line: 1, slug: "newer-card" });
+	await f.command("--last");
+	assert.equal(f.launches.at(-1).path, join(f.cwd, "source-card"));
+	await f.command(card.details.slug);
+	await f.command("--last");
+	assert.equal(f.launches.at(-1).path, f.path);
+	assert.equal(f.entries.at(-1).data.id, card.details.cardId);
+});
+
+test("--file errors, busy/non-TUI guards, and bare-flag guidance never persist a card", async (t) => {
+	const f = await setup(t);
+	await f.command("--file");
+	assert.match(f.notifications.at(-1).text, /query after --file/);
+	for (const args of ['--file "source file.ts":99', '--file "source file.ts":0', "--file missing.ts", `--file ${f.cwd}`]) {
+		await f.command(args);
+		assert.equal(f.notifications.at(-1).level, "error");
+	}
+	f.ctx.isIdle = () => false;
+	await f.command('--file "source file.ts"');
+	assert.match(f.notifications.at(-1).text, /Wait for Pi/);
+	f.ctx.mode = "rpc";
+	await f.command('--file "source file.ts"');
+	assert.match(f.notifications.at(-1).text, /interactive TUI/);
+	assert.equal(f.launches.length, 0);
+	assert.equal(f.entries.length, 0);
+});
+
+test("registered --file autocomplete is side-effect free and cancels on session changes", async (t) => {
+	const f = await setup(t);
+	await f.show({ slug: "source-card" });
+	const before = JSON.stringify(f.entries);
+	const input = "/code --file sf";
+	for (const force of [false, true]) {
+		const suggestions = await f.provider.getSuggestions([input], 0, input.length, { force, signal: new AbortController().signal });
+		assert.equal(suggestions.items[0].label, "source file.ts");
+		const result = f.provider.applyCompletion([input], 0, input.length, suggestions.items[0], suggestions.prefix);
+		assert.equal(result.lines[0], '/code --file "source file.ts"');
+	}
+	assert.equal(JSON.stringify(f.entries), before);
+	assert.equal(f.messages.length, 0);
+	assert.equal(f.launches.length, 0);
+	assert.match(await readFile(f.path, "utf8"), /1000/);
+	const pending = f.provider.getSuggestions([input], 0, input.length, { signal: new AbortController().signal });
+	f.events.get("session_tree")({}, f.ctx);
+	assert.equal(await pending, null);
+	const afterTree = await f.provider.getSuggestions([input], 0, input.length, { signal: new AbortController().signal });
+	assert.equal(afterTree.items[0].label, "source file.ts");
+	const shutdown = f.provider.getSuggestions([input], 0, input.length, { signal: new AbortController().signal });
+	f.events.get("session_shutdown")();
+	assert.equal(await shutdown, null);
+});
+
+test("session replacement during direct opening suppresses stale change reports", async (t) => {
+	let f;
+	f = await setup(t, async (_ctx, target) => {
+		await writeFile(target.path, "changed\n");
+		f.events.get("session_shutdown")();
+	});
+	await f.command('--file "source file.ts"');
+	assert.equal(f.launches.length, 1);
+	assert.equal(f.entries.length, 0);
+	assert.equal(f.messages.length, 0);
+});
+
+test("--last file history survives reload/resume and follows the active branch, not a global cache", async (t) => {
+	const f = await setup(t);
+	await f.show({ line: 1 });
+	const cardBranch = structuredClone(f.entries);
+	await f.command('--file "source file.ts":2:4');
+	const fileBranch = JSON.parse(JSON.stringify(f.entries));
+	assert.deepEqual(Object.keys(fileBranch.at(-1).data).sort(), ["column", "cwd", "kind", "line", "path", "realPath", "version"]);
+	f.events.get("session_shutdown")();
+	f.entries.splice(0, f.entries.length, ...fileBranch);
+	f.initialize(false);
+	f.events.get("session_start")({ reason: "resume" }, f.ctx);
+	await f.command("--last");
+	assert.equal(f.launches.at(-1).line, 2);
+	assert.equal(f.launches.at(-1).column, 4);
+	assert.equal(f.messages.length, 0);
+	f.entries.splice(0, f.entries.length, ...cardBranch);
+	f.events.get("session_tree")({}, f.ctx);
+	await f.command("--last");
+	assert.equal(f.launches.at(-1).line, 1);
+	assert.equal(f.entries.at(-1).data.kind, "card");
+	f.entries.splice(0, f.entries.length, ...fileBranch);
+	f.events.get("session_tree")({}, f.ctx);
+	await f.command("--last");
+	assert.equal(f.launches.at(-1).line, 2);
+	const launches = f.launches.length;
+	f.events.get("session_shutdown")();
+	f.entries.length = 0;
+	f.initialize();
+	await f.command("--last");
+	assert.equal(f.launches.length, launches);
+	assert.match(f.notifications.at(-1).text, /No code cards or opened files/);
+});
+
+test("invalid commands, cancellation, and spawn failures do not replace the last opened file", async (t) => {
+	let fail = false;
+	const f = await setup(t, async () => fail ? { status: null, signal: null, error: "missing nvim" } : undefined);
+	await f.show({ slug: "older-card" });
+	const other = join(f.cwd, "other.ts");
+	await writeFile(other, "other\n");
+	await f.command("--file other.ts");
+	const before = JSON.stringify(f.entries);
+	await f.command("--file missing.ts");
+	await f.command("--file");
+	f.ctx.ui.select = async () => undefined;
+	await f.command("");
+	await writeFile(f.path, "missing anchor\n");
+	f.ctx.ui.confirm = async () => false;
+	await f.command("older-card");
+	fail = true;
+	await f.command('--file "source file.ts"');
+	assert.equal(JSON.stringify(f.entries), before);
+	fail = false;
+	await f.command("--last");
+	assert.equal(f.launches.at(-1).path, other);
+	assert.equal(f.messages.length, 0);
+});
+
+test("a nonzero editor exit still updates --last when the editor actually opened", async (t) => {
+	const f = await setup(t, async () => ({ status: 1, signal: null }));
+	await f.show();
+	await writeFile(join(f.cwd, "other.ts"), "other\n");
+	await f.command("--file other.ts");
+	await f.command("--last");
+	assert.equal(f.launches.at(-1).path, join(f.cwd, "other.ts"));
+	assert.equal(f.entries.at(-1).data.kind, "file");
+});
+
+test("--last refuses a changed symlink, different cwd, or missing file without falling back to a card", async (t) => {
+	const f = await setup(t);
+	await f.show();
+	const alias = join(f.cwd, "alias.ts");
+	await symlink(f.path, alias);
+	await f.command("--file alias.ts");
+	const before = JSON.stringify(f.entries);
+	await writeFile(join(f.cwd, "other.ts"), "other\n");
+	await rm(alias);
+	await symlink(join(f.cwd, "other.ts"), alias);
+	await f.command("--last");
+	assert.match(f.notifications.at(-1).text, /symlink target changed/);
+	f.ctx.cwd = tmpdir();
+	await f.command("--last");
+	assert.match(f.notifications.at(-1).text, /different working directory/);
+	f.ctx.cwd = f.cwd;
+	await rm(alias);
+	await f.command("--last");
+	assert.equal(f.notifications.at(-1).level, "error");
+	assert.equal(f.launches.length, 1);
+	assert.equal(JSON.stringify(f.entries), before);
+});
+
+test("--last ignores malformed restored history and card references outside the current branch", async (t) => {
+	const f = await setup(t);
+	const valid = { version: 1, kind: "file", cwd: f.cwd, path: f.path, realPath: f.path, line: 1, column: 1 };
+	for (const data of [null, {}, { ...valid, version: 2 }, { ...valid, kind: "other" }, { ...valid, path: "relative" },
+		{ ...valid, path: "/bad\0path" }, { ...valid, realPath: undefined }, { ...valid, cwd: "relative" },
+		{ ...valid, line: -1 }, { ...valid, column: 0 }, { ...valid, line: 1.5 },
+		{ version: 1, kind: "card", id: "not-an-id" }, { version: 1, kind: "card", id: "abcdef01" }]) {
+		f.entries.push({ type: "custom", customType: OPEN_TYPE, data });
+	}
+	await f.command("--last");
+	assert.equal(f.launches.length, 0);
+	assert.match(f.notifications.at(-1).text, /No code cards or opened files/);
+});
+
 test("failed handoff releases the interaction lock so the next attempt works", async (t) => {
 	let count = 0;
 	const f = await setup(t, async () => { if (++count === 1) throw new Error("missing nvim"); });
 	await f.command('"source file.ts":2');
 	assert.match(f.notifications.at(-1).text, /missing nvim/);
-	await f.command("--last");
+	assert.equal(f.entries.length, 0);
+	await f.command('--file "source file.ts":2');
 	assert.equal(f.launches.length, 2);
+	assert.equal(f.entries.length, 1);
+	assert.equal(f.entries[0].customType, OPEN_TYPE);
 });

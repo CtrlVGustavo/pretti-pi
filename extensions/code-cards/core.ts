@@ -6,6 +6,7 @@ import { basename, extname, isAbsolute, relative, resolve } from "node:path";
 import { createTwoFilesPatch } from "diff";
 
 export const CARD_TYPE = "pretti-code-card";
+export const OPEN_TYPE = "pretti-code-open";
 export const MAX_FILE_BYTES = 2 * 1024 * 1024;
 export const MAX_DIFF_BYTES = 16 * 1024;
 export const MAX_DIFF_LINES = 200;
@@ -46,27 +47,52 @@ export interface CardRequest {
 
 export type CodeCommand = { kind: "picker" | "last" } | { kind: "card"; id: string } | { kind: "file"; request: CardRequest };
 
+export type CodeOpen = { version: 1; kind: "card"; id: string }
+	| ({ version: 1; kind: "file" } & Pick<CodeCard, "cwd" | "path" | "realPath" | "line" | "column">);
+
+/** Open history stores only references/positions, never another preview or file contents. */
+export function isCodeOpen(value: unknown): value is CodeOpen {
+	if (!value || typeof value !== "object") return false;
+	const item = value as CodeOpen;
+	if (item.version !== 1) return false;
+	if (item.kind === "card") return typeof item.id === "string" && /^[a-f0-9]{8}$/.test(item.id);
+	return item.kind === "file"
+		&& [item.cwd, item.path, item.realPath].every((path) => typeof path === "string" && isAbsolute(path) && !path.includes("\0"))
+		&& positiveInteger(item.line) && positiveInteger(item.column);
+}
+
 export function positiveInteger(value: number): boolean {
 	return Number.isSafeInteger(value) && value > 0;
 }
 
 /** No shell parsing: the entire argument is a path, with optional quotes and :line:column. */
 export function parseCodeCommand(args: string, cards: readonly CodeCard[] = []): CodeCommand {
-	const input = args.trim();
+	let input = args.trim();
 	if (!input) return { kind: "picker" };
-	if (input === "--last") return { kind: "last" };
-	// Keep legacy #id links working, but all new UI uses bare IDs.
-	if (/^#?[a-f0-9]{8}$/i.test(input)) return { kind: "card", id: input.replace(/^#/, "").toLowerCase() };
-	const card = cards.find((item) => item.slug === input);
-	if (card) return { kind: "card", id: card.id };
+	const fileMode = /^--file(?:\s|$)/.test(input);
+	if (fileMode) {
+		input = input.slice(6).trim();
+		if (!input) throw new Error("Use /code --file <path>[:line[:column]]. Type a query after --file to fuzzy-search files.");
+	} else {
+		if (input === "--last") return { kind: "last" };
+		// Keep legacy #id links working, but all new UI uses bare IDs.
+		if (/^#?[a-f0-9]{8}$/i.test(input)) return { kind: "card", id: input.replace(/^#/, "").toLowerCase() };
+		const card = cards.find((item) => item.slug === input);
+		if (card) return { kind: "card", id: card.id };
+	}
 	// Explicit paths (./name, quoted paths, or name:line) bypass slug lookup.
 	let path: string;
 	let suffix: string;
 	if (input.startsWith('"') || input.startsWith("'")) {
 		const quote = input[0];
-		const end = input.indexOf(quote, 1);
-		if (end < 0) throw new Error("Unclosed path quote. Use /code \"path with spaces.ts\":42");
-		path = input.slice(1, end);
+		let end = 1;
+		path = "";
+		for (; end < input.length && input[end] !== quote; end++) {
+			// Double quotes allow escaped quotes/backslashes; single quotes stay literal.
+			if (quote === '"' && input[end] === "\\" && /["\\]/.test(input[end + 1] ?? "")) end++;
+			path += input[end];
+		}
+		if (end === input.length) throw new Error("Unclosed path quote. Use /code \"path with spaces.ts\":42");
 		suffix = input.slice(end + 1);
 		if (suffix && !/^:\d+(?::\d+)?$/.test(suffix)) throw new Error("Expected :line or :line:column after the path.");
 	} else {
@@ -83,6 +109,13 @@ export function parseCodeCommand(args: string, cards: readonly CodeCard[] = []):
 	return { kind: "file", request: { path, line, column } };
 }
 
+/** Round-trippable command argument, not shell escaping. */
+export function quoteFilePath(path: string): string {
+	const literal = path.startsWith("@") ? `./${path}` : path;
+	return /[\s'"\\:]|^~/.test(literal)
+		? `"${literal.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"` : literal;
+}
+
 export function resolveFilePath(cwd: string, path: string): string {
 	const withoutAt = path.startsWith("@") ? path.slice(1) : path;
 	if (!withoutAt || withoutAt.includes("\0")) throw new Error("A non-empty file path is required.");
@@ -94,8 +127,8 @@ export async function readSnapshot(path: string): Promise<Snapshot> {
 	const file = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
 	try {
 		const stat = await file.stat();
-		if (!stat.isFile()) throw new Error("Code cards require a regular file.");
-		if (stat.size > MAX_FILE_BYTES) throw new Error("Code cards support files up to 2 MiB.");
+		if (!stat.isFile()) throw new Error("Opening code requires a regular file.");
+		if (stat.size > MAX_FILE_BYTES) throw new Error("Opening code supports files up to 2 MiB.");
 		const buffer = Buffer.alloc(MAX_FILE_BYTES + 1);
 		let length = 0;
 		while (length < buffer.length) {
@@ -103,14 +136,14 @@ export async function readSnapshot(path: string): Promise<Snapshot> {
 			if (!bytesRead) break;
 			length += bytesRead;
 		}
-		if (length > MAX_FILE_BYTES) throw new Error("Code cards support files up to 2 MiB.");
+		if (length > MAX_FILE_BYTES) throw new Error("Opening code supports files up to 2 MiB.");
 		const bytes = buffer.subarray(0, length);
-		if (bytes.includes(0)) throw new Error("Binary files are not supported by code cards.");
+		if (bytes.includes(0)) throw new Error("Binary files are not supported.");
 		let text: string;
 		try {
 			text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
 		} catch {
-			throw new Error("Code cards require UTF-8 text.");
+			throw new Error("Opening code requires UTF-8 text.");
 		}
 		return { text, hash: createHash("sha256").update(bytes).digest("hex") };
 	} finally {
@@ -161,11 +194,30 @@ export function uniqueCardSlug(base: string, cards: readonly CodeCard[]): string
 	return slug;
 }
 
-export async function createCard(cwd: string, request: CardRequest): Promise<CodeCard> {
+async function prepareFile(cwd: string, requestedPath: string) {
 	const canonicalCwd = await realpath(cwd);
-	const path = resolveFilePath(canonicalCwd, request.path);
+	const path = resolveFilePath(canonicalCwd, requestedPath);
 	const realPath = await realpath(path);
 	const snapshot = await readSnapshot(path);
+	return { cwd: canonicalCwd, path, realPath, label: relative(canonicalCwd, path) || path, snapshot };
+}
+
+/** Direct opening needs a validated file and position, not a preview or persisted card. */
+export async function prepareFileTarget(
+	cwd: string, request: Pick<CardRequest, "path" | "line" | "column">, options: { clampLine?: boolean } = {},
+) {
+	const file = await prepareFile(cwd, request.path);
+	let line = request.line ?? 1;
+	const column = request.column ?? 1;
+	if (!positiveInteger(line) || !positiveInteger(column)) throw new Error("Line and column must be positive integers.");
+	const count = fileLines(file.snapshot.text).length;
+	if (options.clampLine) line = Math.min(line, count);
+	if (line > count) throw new Error(`Line ${line} is beyond the file's ${count} lines.`);
+	return { ...file, line, column };
+}
+
+export async function createCard(cwd: string, request: CardRequest): Promise<CodeCard> {
+	const { cwd: canonicalCwd, path, realPath, label, snapshot } = await prepareFile(cwd, request.path);
 	const lines = fileLines(snapshot.text);
 	let line = request.line ?? 1;
 	const column = request.column ?? 1;
@@ -182,7 +234,6 @@ export async function createCard(cwd: string, request: CardRequest): Promise<Cod
 	if (!positiveInteger(endLine) || endLine < line || endLine > lines.length) throw new Error("endLine must be within the file and at or after the target line.");
 	anchor ??= lines.slice(line - 1, Math.min(line + 2, endLine)).join("\n").slice(0, 4096);
 	const previewStart = Math.max(1, line - 2);
-	const label = relative(canonicalCwd, path) || path;
 	return {
 		version: 1, id: randomBytes(4).toString("hex"), cwd: canonicalCwd, path, realPath,
 		slug: normalizeSlug(request.slug ?? "") || normalizeSlug(request.title ?? "")

@@ -60,6 +60,21 @@ test("add, list, check, all, cleardone persist through reload and manual edits",
 	assert.equal(await readFile(f.path, "utf8"), "- [ ] Manual task <!-- todo:manual-task -->\n");
 });
 
+test("--done handles missing files and lists finished tasks without changing task state", async (t) => {
+	const f = await setup(t);
+	await f.command("--done");
+	assert.equal(await readFile(f.path, "utf8"), EMPTY_TODO);
+	assert.equal(f.entries.at(-1).data.output, "TODO.md is empty.");
+	await f.command("Finished task");
+	await f.command("Pending task");
+	await f.command("--check finished-task");
+	const before = await readFile(f.path, "utf8");
+	await f.command("--done");
+	assert.equal(f.entries.at(-1).data.output, "TODO.md — checked items\n[x] finished-task — Finished task");
+	assert.equal(await readFile(f.path, "utf8"), before);
+	assert.deepEqual(await f.complete("--d"), [{ value: "--done", label: "--done", description: "List checked tasks" }]);
+});
+
 test("completion reads fresh contents, never creates or annotates TODO.md, and excludes checked items", async (t) => {
 	const f = await setup(t);
 	assert.equal(await f.complete("--check "), null);
@@ -119,7 +134,7 @@ test("real Pi autocomplete inserts the whole --check argument and does not execu
 
 test("invalid commands have no filesystem side effects", async (t) => {
 	const f = await setup(t);
-	for (const args of ["--bad", "--check", "--cleardone x", "--all --unchecked"]) await f.command(args);
+	for (const args of ["--bad", "--check", "--cleardone x", "--all --cleardone"]) await f.command(args);
 	await assert.rejects(stat(f.path), { code: "ENOENT" });
 	assert.equal(f.entries.length, 0);
 	assert.equal(f.notifications.length, 4);

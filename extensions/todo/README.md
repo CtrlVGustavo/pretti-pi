@@ -7,8 +7,8 @@
 | Command | Action |
 | --- | --- |
 | `/todo` | List unchecked tasks. |
-| `/todo --unchecked` | List unchecked tasks. |
 | `/todo --all` | List every task, in file order. |
+| `/todo --done` | List only checked tasks, in file order. |
 | `/todo <text>` | Append one unchecked task and print its slug. Quotes are unnecessary and are treated as literal text. |
 | `/todo --check <slug>` | Check an exact, case-sensitive slug. An already checked task is a no-op. |
 | `/todo --cleardone` | Remove checked task lines. |
@@ -36,7 +36,7 @@ Collisions receive numeric suffixes (`-2`, `-3`, …), which do not count toward
 
 Existing tasks without metadata receive persistent slug comments on first successful use, including listing. Explicit slugs are reserved before missing ones are generated. Existing stored slugs, including older slugs longer than three words, are preserved and remain valid references. Manually editing task text does not change stored slugs. Duplicate or malformed slug metadata is an error: repair the file manually rather than allowing an ambiguous check or silent renaming. A failed slug lookup and an already checked lookup do not annotate other tasks.
 
-Flag completion suggests `--all`, `--unchecked`, `--check`, and `--cleardone`. After `--check `, completion suggests unchecked slugs with task descriptions and filters by the typed prefix. It reads the current file each time, so manual edits and checks are reflected without reload. Completion never creates or writes the file; untagged tasks use the same provisional slugs that command execution will persist. If the file changes between completion and execution, the command operates on the current file.
+Flag completion suggests `--all`, `--done`, `--check`, and `--cleardone`, each with a description. After `--check `, completion suggests unchecked slugs with task descriptions and filters by the typed prefix. It reads the current file each time, so manual edits and checks are reflected without reload. Completion never creates or writes the file; untagged tasks use the same provisional slugs that command execution will persist. If the file changes between completion and execution, the command operates on the current file.
 
 ## Planning from tasks
 

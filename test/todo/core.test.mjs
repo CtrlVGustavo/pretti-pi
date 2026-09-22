@@ -5,8 +5,9 @@ import { parseTodoCommand, parseTodoDocument, safeText, todoCompletions, transfo
 const run = (source, args = "") => transformTodo(source, parseTodoCommand(args));
 
 test("command grammar accepts all actions and literal unquoted text", () => {
-	for (const args of ["", "  ", "--unchecked"]) assert.deepEqual(parseTodoCommand(args), { kind: "list", all: false });
-	assert.deepEqual(parseTodoCommand(" --all "), { kind: "list", all: true });
+	for (const args of ["", "  "]) assert.deepEqual(parseTodoCommand(args), { kind: "list", filter: "unchecked" });
+	assert.deepEqual(parseTodoCommand(" --all "), { kind: "list", filter: "all" });
+	assert.deepEqual(parseTodoCommand(" --done "), { kind: "list", filter: "done" });
 	assert.deepEqual(parseTodoCommand("--cleardone"), { kind: "cleardone" });
 	assert.deepEqual(parseTodoCommand("--check fix-login-2"), { kind: "check", slug: "fix-login-2" });
 	assert.deepEqual(parseTodoCommand("Fix login redirect"), { kind: "add", text: "Fix login redirect" });
@@ -15,7 +16,7 @@ test("command grammar accepts all actions and literal unquoted text", () => {
 });
 
 test("invalid flags, extra arguments, controls, and reserved metadata are rejected", () => {
-	for (const args of ["--bad", "--", "--check", "--check a b", "--all --unchecked", "--all text", "--cleardone x", "--check #slug", "--check SLUG", "a\nb", "a\rb", "a\0b", "a\x1b[2J", "x <!-- todo:slug -->"]) {
+	for (const args of ["--bad", "--", "--done text", "--done --all", "--all --done", "--done --check fix", "--done --cleardone", "--check", "--check a b", "--all --cleardone", "--all text", "--cleardone x", "--check #slug", "--check SLUG", "a\nb", "a\rb", "a\0b", "a\x1b[2J", "x <!-- todo:slug -->"]) {
 		assert.throws(() => parseTodoCommand(args), undefined, args);
 	}
 });
@@ -90,10 +91,18 @@ test("existing tasks get stable slugs, reserving explicit slugs before generatin
 test("list filters checked items and --all keeps file order", () => {
 	const source = "- [ ] First\n* [X] Second\n1. [ ] Third\n";
 	assert.equal(run(source).output, "TODO.md — unchecked items\n[ ] first — First\n[ ] third — Third");
-	assert.equal(run(source, "--unchecked").output, run(source).output);
 	assert.equal(run(source, "--all").output, "TODO.md — all items\n[ ] first — First\n[x] second — Second\n[ ] third — Third");
 	assert.equal(run("- [x] Done\n").output, "No unchecked items.");
 	assert.equal(run("# TODO\n\nNotes only\n").output, "TODO.md is empty.");
+});
+
+test("--done lists only checked items in file order and handles empty selections", () => {
+	const source = "- [x] First <!-- todo:first -->\n- [ ] Second <!-- todo:second -->\n* [X] Third <!-- todo:third -->\n";
+	const result = run(source, "--done");
+	assert.equal(result.output, "TODO.md — checked items\n[x] first — First\n[x] third — Third");
+	assert.equal(result.content, source);
+	assert.equal(run("- [ ] Pending\n", "--done").output, "No checked items.");
+	assert.equal(run("# TODO\n", "--done").output, "TODO.md is empty.");
 });
 
 test("append handles duplicate text, checked collisions, BOM, CRLF, and missing final newline", () => {
@@ -154,6 +163,18 @@ test("cleardone removes checked task lines but preserves notes, headings, and un
 	assert.equal(run(result.content, "--cleardone").output, "No checked items to remove.");
 	assert.equal(run("- [x] Only <!-- todo:only -->\n", "--cleardone").content, "");
 	assert.equal(run("\ufeff- [x] Only <!-- todo:only -->\n", "--cleardone").content, "\ufeff");
+});
+
+test("autocomplete includes descriptions for every flag, including filtered suggestions", () => {
+	const flags = [
+		{ value: "--all", label: "--all", description: "List all tasks" },
+		{ value: "--done", label: "--done", description: "List checked tasks" },
+		{ value: "--check ", label: "--check", description: "Mark a task done by slug" },
+		{ value: "--cleardone", label: "--cleardone", description: "Remove checked tasks" },
+	];
+	assert.deepEqual(todoCompletions(null, ""), flags);
+	assert.deepEqual(todoCompletions(null, "--c"), flags.slice(2));
+	assert.deepEqual(todoCompletions(null, "--d"), [flags[1]]);
 });
 
 test("autocomplete suggests flags and only unchecked matching slugs, preserving --check", () => {

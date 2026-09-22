@@ -16,7 +16,7 @@ export default function todoExtension(pi: ExtensionAPI) {
 		new Text(theme.fg(entry.data?.error ? "error" : "text", safeText(entry.data?.output ?? "TODO.md")), 0, 0));
 
 	pi.registerCommand("todo", {
-		description: "TODO.md: /todo [--all | --unchecked | --cleardone | --check <slug> | <text>]",
+		description: "TODO.md: /todo [--all | --done | --cleardone | --check <slug> | <text>]",
 		getArgumentCompletions: async (prefix) => {
 			const ctx = completionContext;
 			if (!ctx || ctx.mode !== "tui") return null;

@@ -9,7 +9,7 @@ My personal setup for [Pi Coding Agent](https://github.com/earendil-works/pi).
 | **Worktree commands** | `/commit`, `/addworktree`, `/worktrees`, `/rmworktree`, and `/mergeworktree` for managing parallel Git work from Pi. |
 | **OpenAI web search** | A `web_search` tool backed by the OpenAI Responses API, with citations, batching, filters, and credential redaction. |
 | **Plan command** | `/plan <request>` or `/plan --todo <slug>` creates a reviewable plan, with unchecked TODO completion and `--all` support. |
-| **Code cards** | Syntax-highlighted code previews with readable slugs, `/code` autocomplete, and user-controlled Neovim editing. |
+| **Code cards** | Syntax-highlighted previews, readable slugs, `/code --file` fuzzy file completion, and user-controlled Neovim editing. |
 | **Todo command** | `/todo` lists, adds, checks, and clears tasks in `TODO.md`, with stable slugs and completion. |
 
 ## Installation
@@ -76,14 +76,30 @@ Ask Pi to show a code card for a file or snippet. Cards have a syntax-highlighte
 ```text
 /code index-hash-detect
 /code a101ca00
-/code src/index.ts:42
+/code --file src/index.ts:42
 ```
 
-Type `/code ` to see available cards, or type part of a slug or ID to filter suggestions. `/code` alone opens a picker; `/code --last` opens the latest card. Completing a reference only fills the command—it does not open the editor.
+Type `/code ` to see available cards, or type part of a slug or ID to filter suggestions. `/code` alone opens a picker; `/code --last` opens the most recent card or file. Completing a reference only fills the command—it does not open the editor.
 
-Cards and their slugs persist across reloads and resumes. References and suggestions are scoped to the current conversation branch. Slug collisions get numeric suffixes such as `index-hash-detect-2`. Older cards remain accessible by bare ID, and old `#id` commands still work. If a filename matches a card reference, use an explicit path such as `./index-hash-detect`.
+Cards and their slugs persist across reloads and resumes. References and card suggestions are scoped to the current conversation branch. Slug collisions get numeric suffixes such as `index-hash-detect-2`. Older cards remain accessible by bare ID, and old `#id` commands still work. If a filename matches a card reference, use `--file` or an explicit path such as `./index-hash-detect`.
 
-Opening a card uses the **current file**, not its preview snapshot. `:wq` saves and returns to Pi; changes to the opened file are reported without automatically starting an assistant turn. Neovim (`nvim`) must be on `PATH`, and opening cards requires Pi's interactive TUI.
+### Open a file without a card
+
+Type `/code --file ` to see file suggestions, then type a fuzzy query (for example `srcidx` to find `src/index.ts`). Matching uses the full relative path, case-insensitively. Select a suggestion with Tab or the completion menu, then submit the completed command to open Neovim. Completion only fills the path; it never opens the editor or modifies files. Submitting a fuzzy query without completing it treats the query as a literal path.
+
+```text
+/code --file src/index.ts
+/code --file "src/my file.ts":42:3
+/code --file ~/notes.md
+```
+
+`--file` always selects a path, even when it matches a card slug, ID, or `--last`. Spaces are quoted automatically; double-quoted paths support escaped quotes (`\"`) and backslashes (`\\`). Optional line and column numbers are positive and 1-based (columns are Neovim byte columns). Relative paths resolve against Pi's current working directory. A bare `/code --file` displays a usage hint rather than another picker.
+
+Project suggestions include tracked and untracked files beneath the current directory, including dotfiles, and honor Git ignore rules for untracked files. Absolute, `~/`, and `../` queries browse one directory at a time. Without a Git repository or Git executable, a bounded filesystem walk skips `.git`, `node_modules`, and `.worktrees`, without following directory symlinks; this fallback does not interpret ignore files. Discovery is asynchronous and cancellable, capped at 20,000 candidates, 4 MiB of Git output, and a two-second budget, with at most 20 suggestions. The fallback walk also stops below 20 directory levels. Explicit paths still work when a file is not suggested.
+
+Direct file opening creates **no code card**. `/code --last` follows the most recent interaction: a newly shown card, an opened card, or an opened file (including the `/code src/index.ts:42` shorthand). This history persists across reloads/resumes and follows the active conversation branch. Cancelled interactions and editor launch failures do not replace it. Reopening a file uses its last requested line/column, clamping the line to the end if the file has become shorter; it does not restore old contents or track Neovim's final cursor position. Files must already exist and be regular UTF-8 text files up to 2 MiB; directories, binary files, and nonexistent files cannot be opened.
+
+Opening a card uses the **current file**, not its preview snapshot. For both cards and direct files, `:wq` saves and returns to Pi; changes to the opened file are reported without automatically starting an assistant turn. Neovim (`nvim`) must be on `PATH`, and opening requires Pi to be idle in its interactive TUI.
 
 Highlighting uses the active Pi theme and falls back to plain text for unknown languages or errors. It operates on the bounded preview, so snippets beginning inside multiline strings or comments may lack complete syntax context. Previews remain limited to 12 lines of 240 characters (plus an ellipsis when truncated); files must be UTF-8 text up to 2 MiB.
 
@@ -101,8 +117,9 @@ Manage `TODO.md` in Pi's current working directory without starting an assistant
 
 | Command | Description |
 | --- | --- |
-| `/todo` or `/todo --unchecked` | Show unchecked items and their slugs. |
+| `/todo` | Show unchecked items and their slugs. |
 | `/todo --all` | Show checked and unchecked items in file order. |
+| `/todo --done` | Show only checked items in file order. |
 | `/todo <text>` | Append one unchecked item; spaces need no quotes. |
 | `/todo --check <slug>` | Check the exact matching item. Already checked items stay checked. |
 | `/todo --cleardone` | Remove checked task lines, preserving notes and unchecked subtasks. |

@@ -3,10 +3,11 @@ import { getLanguageFromPath, highlightCode, type ExtensionAPI, type ExtensionCo
 import { Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type AutocompleteItem, type Component } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
-	CARD_TYPE, boundedDiff, createCard, isCodeCard, locateCard, parseCodeCommand, readSnapshot, safeText, uniqueCardSlug,
-	type CodeCard,
+	CARD_TYPE, OPEN_TYPE, boundedDiff, createCard, isCodeCard, isCodeOpen, locateCard, parseCodeCommand, prepareFileTarget, quoteFilePath, readSnapshot, safeText, uniqueCardSlug,
+	type CodeCard, type CodeOpen, type Snapshot,
 } from "./core.ts";
 import { openInNeovim, type EditorExit, type EditorTarget } from "./neovim.ts";
+import { createFileAutocompleteProvider } from "./file-completion.ts";
 
 const EDIT_TYPE = "pretti-code-edit";
 
@@ -28,8 +29,12 @@ function cardDescription(card: CodeCard): string {
 
 export function cardCompletions(cards: readonly CodeCard[], prefix: string): AutocompleteItem[] | null {
 	const query = prefix.trimStart().toLowerCase();
-	if (query.startsWith("-") && "--last".startsWith(query)) {
-		return [{ value: "--last", label: "--last", description: "Open the most recent code card" }];
+	if (query.startsWith("-")) {
+		const flags = [
+			{ value: "--last", label: "--last", description: "Open the most recent card or file" },
+			{ value: "--file ", label: "--file", description: "Fuzzy-search files; open without a code card" },
+		].filter((item) => item.label.startsWith(query));
+		return flags.length ? flags : null;
 	}
 	const items = cards.toReversed().flatMap((card) => {
 		const references = query ? [card.slug, card.id] : [cardReference(card)];
@@ -90,6 +95,21 @@ function cardsInBranch(ctx: ExtensionContext): CodeCard[] {
 		entry.type === "custom" && entry.customType === CARD_TYPE && isCodeCard(entry.data) ? [entry.data] : []);
 }
 
+/** Branch order, not wall-clock timestamps, determines the most recent interaction. */
+function lastInBranch(ctx: ExtensionContext, cards: readonly CodeCard[]): CodeOpen | undefined {
+	for (const entry of ctx.sessionManager.getBranch().toReversed()) {
+		if (entry.type !== "custom") continue;
+		if (entry.customType === CARD_TYPE && isCodeCard(entry.data)) {
+			return { version: 1, kind: "card", id: entry.data.id };
+		}
+		if (entry.customType === OPEN_TYPE && isCodeOpen(entry.data)) {
+			const opened = entry.data;
+			if (opened.kind === "file" || cards.some((card) => card.id === opened.id)) return opened;
+		}
+	}
+	return undefined;
+}
+
 interface Dependencies {
 	openEditor: (ctx: ExtensionContext, target: EditorTarget) => Promise<EditorExit>;
 }
@@ -100,9 +120,19 @@ export function createCodeCardsExtension({ openEditor = openInNeovim }: Partial<
 		let opening = false;
 		let generation = 0;
 		let completionContext: ExtensionContext | undefined;
-		pi.on("session_start", (_event, ctx) => { completionContext = ctx; });
-		pi.on("session_shutdown", () => { generation++; completionContext = undefined; });
-		pi.on("session_tree", (_event, ctx) => { generation++; completionContext = ctx; });
+		let completionLifetime = new AbortController();
+		const resetCompletions = (ctx?: ExtensionContext) => {
+			completionLifetime.abort();
+			completionLifetime = new AbortController();
+			completionContext = ctx;
+		};
+		pi.on("session_start", (_event, ctx) => {
+			resetCompletions(ctx);
+			if (ctx.mode === "tui") ctx.ui.addAutocompleteProvider((current) => createFileAutocompleteProvider(current, () =>
+				completionContext?.mode === "tui" ? { cwd: completionContext.cwd, signal: completionLifetime.signal } : undefined));
+		});
+		pi.on("session_shutdown", () => { generation++; resetCompletions(); });
+		pi.on("session_tree", (_event, ctx) => { generation++; resetCompletions(ctx); });
 
 		const persistCard = (card: CodeCard, ctx: ExtensionContext) => {
 			card.slug = uniqueCardSlug(card.slug ?? `code-${card.id}`, cardsInBranch(ctx));
@@ -151,7 +181,7 @@ export function createCodeCardsExtension({ openEditor = openInNeovim }: Partial<
 		});
 
 		pi.registerCommand("code", {
-			description: "Edit in Neovim: /code slug, /code id, /code path[:line[:column]], /code --last, or /code for a card picker",
+			description: "Edit in Neovim: /code slug, /code id, /code --file path[:line[:column]] (fuzzy file completion), /code --last (most recent card or file), or /code for a card picker",
 			getArgumentCompletions: (prefix) => completionContext?.mode === "tui"
 				? cardCompletions(cardsInBranch(completionContext), prefix) : null,
 			handler: async (args, ctx) => {
@@ -168,18 +198,36 @@ export function createCodeCardsExtension({ openEditor = openInNeovim }: Partial<
 				const active = () => current === generation;
 				try {
 					const cards = cardsInBranch(ctx);
-					const command = parseCodeCommand(args, cards);
-					let card: CodeCard | undefined;
+					let command = parseCodeCommand(args, cards);
+					let previousFile: Extract<CodeOpen, { kind: "file" }> | undefined;
+					if (command.kind === "last") {
+						const last = lastInBranch(ctx, cards);
+						if (!last) throw new Error("No code cards or opened files yet. Use /code --file path/to/file.ts, or ask Pi to show a code card.");
+						if (last.kind === "file") {
+							previousFile = last;
+							command = { kind: "file", request: last };
+						} else command = { kind: "card", id: last.id };
+					}
+					let target: EditorTarget & { label: string; realPath: string };
+					let before: Snapshot;
+					let reference: string;
+					let opened: CodeOpen;
 					if (command.kind === "file") {
-						card = await createCard(ctx.cwd, command.request);
+						if (previousFile) {
+							if (await realpath(ctx.cwd) !== previousFile.cwd) throw new Error("The last file belongs to a different working directory. Open it explicitly with /code --file instead.");
+							if (await realpath(previousFile.path) !== previousFile.realPath) throw new Error("The last file's symlink target changed. Open it explicitly with /code --file instead.");
+						}
+						const file = await prepareFileTarget(ctx.cwd, command.request, { clampLine: !!previousFile });
 						if (!active()) return;
-						persistCard(card, ctx);
+						target = previousFile ? { ...file, cwd: previousFile.cwd, realPath: previousFile.realPath } : file;
+						before = file.snapshot;
+						reference = `--file ${quoteFilePath(file.path)}`;
+						opened = { version: 1, kind: "file", cwd: file.cwd, path: file.path, realPath: file.realPath, line: file.line, column: file.column };
 					} else {
+						let card: CodeCard | undefined;
 						if (command.kind === "card") {
 							card = cards.find((item) => item.id === command.id);
 							if (!card) throw new Error(`Card ${command.id} is not in the current conversation branch.`);
-						} else if (command.kind === "last") {
-							card = cards.at(-1);
 						} else if (cards.length) {
 							const latestFirst = cards.toReversed();
 							const choices = latestFirst.map((item) => `${cardReference(item)}${item.slug ? ` · ${item.id}` : ""} · ${cardDescription(item)}`);
@@ -187,23 +235,30 @@ export function createCodeCardsExtension({ openEditor = openInNeovim }: Partial<
 							if (!choice || !active()) return;
 							card = latestFirst[choices.indexOf(choice)];
 						}
-						if (!card) throw new Error("No code cards yet. Use /code path/to/file.ts:42, or ask Pi to show a code card.");
+						if (!card) throw new Error("No code cards yet. Use /code --file path/to/file.ts:42, or ask Pi to show a code card.");
+						if (await realpath(ctx.cwd) !== card.cwd) throw new Error("This card belongs to a different working directory. Create a new card here instead.");
+						if (await realpath(card.path) !== card.realPath) throw new Error("The card's symlink target changed. Create a new card before editing.");
+						before = await readSnapshot(card.path);
+						if (!active()) return;
+						const location = locateCard(card, before);
+						if (location.stale) {
+							const confirmed = await ctx.ui.confirm("Code card location changed",
+								`The original code is missing or ambiguous in ${oneLine(card.label)}. Open the current file at line ${location.line} instead? No old content will be restored.`);
+							if (!confirmed || !active()) return;
+						}
+						target = { ...card, line: location.line };
+						reference = cardReference(card);
+						opened = { version: 1, kind: "card", id: card.id };
 					}
-
-					if (await realpath(ctx.cwd) !== card.cwd) throw new Error("This card belongs to a different working directory. Create a new card here instead.");
-					if (await realpath(card.path) !== card.realPath) throw new Error("The card's symlink target changed. Create a new card before editing.");
-					const before = await readSnapshot(card.path);
+					if (await realpath(ctx.cwd) !== target.cwd) throw new Error("The working directory changed. Try opening the file again.");
+					if (await realpath(target.path) !== target.realPath) throw new Error("The file's symlink target changed. Try opening the file again.");
 					if (!active()) return;
-					const location = locateCard(card, before);
-					if (location.stale) {
-						const confirmed = await ctx.ui.confirm("Code card location changed",
-							`The original code is missing or ambiguous in ${oneLine(card.label)}. Open the current file at line ${location.line} instead? No old content will be restored.`);
-						if (!confirmed || !active()) return;
-					}
 					// A picker/confirmation can yield to another extension that starts a turn.
-					if (!ctx.isIdle()) throw new Error("Pi started working. Open the card again after it finishes.");
-					const exit = await openEditor(ctx, { path: card.path, cwd: card.cwd, line: location.line, column: card.column });
+					if (!ctx.isIdle()) throw new Error("Pi started working. Open the file again after it finishes.");
+					const exit = await openEditor(ctx, { path: target.path, cwd: target.cwd, line: target.line, column: target.column });
 					if (!active()) return;
+					// A nonzero editor exit can still have saved edits; a spawn failure never opened anything.
+					if (!exit.error) pi.appendEntry(OPEN_TYPE, opened);
 					if (exit.error || exit.status !== 0) {
 						ctx.ui.notify(exit.error ?? `Neovim exited ${exit.signal ? `with signal ${exit.signal}` : `with code ${exit.status}`}. Any writes already saved remain on disk.`, "warning");
 					}
@@ -211,21 +266,21 @@ export function createCodeCardsExtension({ openEditor = openInNeovim }: Partial<
 					let summary: string;
 					let diff: string | undefined;
 					try {
-						const after = await readSnapshot(card.path);
+						const after = await readSnapshot(target.path);
 						if (!active()) return;
 						if (before.hash === after.hash) {
-							ctx.ui.notify(`Back from Neovim: ${oneLine(card.label)} is unchanged.`, "info");
+							ctx.ui.notify(`Back from Neovim: ${oneLine(target.label)} is unchanged.`, "info");
 							return;
 						}
-						summary = `File changed during Neovim: ${oneLine(card.label)} · reopen with /code ${cardReference(card)}`;
-						diff = boundedDiff(card.label, before.text, after.text);
+						summary = `File changed during Neovim: ${oneLine(target.label)} · reopen with /code ${oneLine(reference)}`;
+						diff = boundedDiff(target.label, before.text, after.text);
 					} catch (error) {
 						if (!active()) return;
-						summary = `Back from Neovim; could not verify ${oneLine(card.label)}: ${message(error)}. The file may have changed or been deleted; inspect it before continuing.`;
+						summary = `Back from Neovim; could not verify ${oneLine(target.label)}: ${message(error)}. The file may have changed or been deleted; inspect it before continuing.`;
 					}
 					pi.sendMessage({
 						customType: EDIT_TYPE,
-						content: `${summary}\nFile: ${JSON.stringify(card.path)}\n${diff ?? ""}\nOnly the opened file was checked; other files edited in Neovim are not tracked by this notification.`,
+						content: `${summary}\nFile: ${JSON.stringify(target.path)}\n${diff ?? ""}\nOnly the opened file was checked; other files edited in Neovim are not tracked by this notification.`,
 						display: true, details: { summary, diff },
 					}, { triggerTurn: false });
 				} catch (error) {

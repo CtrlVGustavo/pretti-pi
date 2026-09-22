@@ -3,10 +3,10 @@ import { readFile, stat } from "node:fs/promises";
 export const TODO_ENTRY_TYPE = "pretti-todo-output";
 export const EMPTY_TODO = "# TODO\n\n";
 export const MAX_FILE_BYTES = 2 * 1024 * 1024;
-export const USAGE = "Usage: /todo [--all | --unchecked | --cleardone | --check <slug> | <text> | -- <text>]";
+export const USAGE = "Usage: /todo [--all | --done | --cleardone | --check <slug> | <text> | -- <text>]";
 
 export type TodoCommand =
-	| { kind: "list"; all: boolean }
+	| { kind: "list"; filter: "unchecked" | "all" | "done" }
 	| { kind: "add"; text: string }
 	| { kind: "check"; slug: string }
 	| { kind: "cleardone" };
@@ -43,8 +43,9 @@ export function isTodoSlug(value: string): boolean {
 
 export function parseTodoCommand(args: string): TodoCommand {
 	const value = args.trim();
-	if (!value || value === "--unchecked") return { kind: "list", all: false };
-	if (value === "--all") return { kind: "list", all: true };
+	if (!value) return { kind: "list", filter: "unchecked" };
+	if (value === "--all") return { kind: "list", filter: "all" };
+	if (value === "--done") return { kind: "list", filter: "done" };
 	if (value === "--cleardone") return { kind: "cleardone" };
 	const check = /^--check\s+(\S+)$/.exec(value);
 	if (check && isTodoSlug(check[1])) return { kind: "check", slug: check[1] };
@@ -116,9 +117,10 @@ export function transformTodo(source: string, command: TodoCommand): TodoResult 
 	let output: string;
 	switch (command.kind) {
 		case "list": {
-			const selected = items.filter((item) => command.all || !item.done);
-			output = !items.length ? "TODO.md is empty." : !selected.length ? "No unchecked items."
-				: `TODO.md${command.all ? " — all items" : " — unchecked items"}\n` + selected.map((item) =>
+			const selected = items.filter((item) => command.filter === "all" || item.done === (command.filter === "done"));
+			const label = command.filter === "done" ? "checked" : command.filter;
+			output = !items.length ? "TODO.md is empty." : !selected.length ? `No ${label} items.`
+				: `TODO.md — ${label} items\n` + selected.map((item) =>
 					`[${item.done ? "x" : " "}] ${item.slug} — ${item.text}`).join("\n");
 			break;
 		}
@@ -176,8 +178,12 @@ export function todoCompletions(source: string | null, prefix: string) {
 			.map((item) => ({ value: `--check ${item.slug}`, label: item.slug, description: safeText(item.text) }));
 		return suggestions.length ? suggestions : null;
 	}
-	const flags = ["--all", "--unchecked", "--check", "--cleardone"];
-	const suggestions = flags.filter((flag) => flag.startsWith(value))
-		.map((flag) => ({ value: flag === "--check" ? `${flag} ` : flag, label: flag }));
+	const flags = [
+		{ value: "--all", label: "--all", description: "List all tasks" },
+		{ value: "--done", label: "--done", description: "List checked tasks" },
+		{ value: "--check ", label: "--check", description: "Mark a task done by slug" },
+		{ value: "--cleardone", label: "--cleardone", description: "Remove checked tasks" },
+	];
+	const suggestions = flags.filter((flag) => flag.label.startsWith(value));
 	return suggestions.length ? suggestions : null;
 }
