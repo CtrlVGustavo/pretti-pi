@@ -77,6 +77,26 @@ test("completion reads fresh contents, never creates or annotates TODO.md, and e
 	assert.equal(await f.complete("--check "), null);
 });
 
+test("keyword slugs persist consistently through completion, commands, and reload", async (t) => {
+	const f = await setup(t);
+	const text = "Please update the installation documentation for Linux";
+	const source = `- [ ] ${text}\n`;
+	await writeFile(f.path, source);
+	assert.equal((await f.complete("--check update-"))[0].value, "--check update-installation-documentation");
+	assert.equal(await readFile(f.path, "utf8"), source);
+	await f.command();
+	assert.equal(await readFile(f.path, "utf8"), `- [ ] ${text} <!-- todo:update-installation-documentation -->\n`);
+	await f.command("Update installation documentation for macOS");
+	f.events.get("session_shutdown")();
+	f.initialize();
+	assert.deepEqual((await f.complete("--check update-")).map((item) => item.value), [
+		"--check update-installation-documentation", "--check update-installation-documentation-2",
+	]);
+	await f.command("--check update-installation-documentation-2");
+	assert.match(await readFile(f.path, "utf8"), /\[x\] Update installation documentation for macOS/);
+	assert.equal(f.notifications.length, 0);
+});
+
 test("real Pi autocomplete inserts the whole --check argument and does not execute it", async (t) => {
 	const f = await setup(t);
 	await f.command("Fix login redirect");

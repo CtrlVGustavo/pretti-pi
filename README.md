@@ -118,7 +118,9 @@ Tasks use normal Markdown checkboxes with stable slug comments:
 - [ ] Fix login redirect <!-- todo:fix-login-redirect -->
 ```
 
-Existing checkbox tasks receive missing slug comments on first use. Repeated text gets suffixes such as `fix-login-redirect-2`, and editing task text does not change its stored slug. The file is read afresh for every command, including completion.
+New slugs use the first three distinct keywords from the task, skipping common filler words such as “the”, “to”, and “please”. For example, “Fix the login redirect after logout” becomes `fix-login-redirect`. Generation is local and deterministic, with no model calls. Collisions get numeric suffixes such as `fix-login-redirect-2`; these numbers do not count toward the three-word limit.
+
+Existing checkbox tasks receive missing slug comments on first use. Stored slugs—including older, longer ones—are preserved, and editing task text does not change them. The file is read afresh for every command, including completion.
 
 See [the todo documentation](extensions/todo/README.md) for parsing, preservation, and error behavior.
 

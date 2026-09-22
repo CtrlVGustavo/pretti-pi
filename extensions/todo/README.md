@@ -25,9 +25,16 @@ Missing files are created with a `# TODO` heading. Listing prints only `TODO.md 
 - [x] Add docs <!-- todo:add-docs -->
 ```
 
-Slugs are lowercase ASCII words separated by hyphens, derived from task text. Accents are normalized where possible; unusable text falls back to `todo`. Generated bases are limited to 80 characters. Collisions receive numeric suffixes (`-2`, `-3`, …), checking both checked and unchecked tasks currently in the file. Removed slugs can be reused.
+New slugs use at most **three distinct keywords from the task text**, in their original order. Generation is a deterministic local heuristic, not semantic summarization: normalize accents and lowercase ASCII words, skip a small English filler list (including `a`, `the`, `to`, `for`, `please`, and `kindly`), remove repeated words, and take the first three remaining words. Words are joined with hyphens; text with no remaining usable words falls back to `todo`. Generated bases retain the 80-character cap.
 
-Existing tasks without metadata receive persistent slug comments on first successful use, including listing. Explicit slugs are reserved before missing ones are generated. Manually editing task text does not change stored slugs. Duplicate or malformed slug metadata is an error: repair the file manually rather than allowing an ambiguous check or silent renaming. A failed slug lookup and an already checked lookup do not annotate other tasks.
+Examples:
+- `Fix the login redirect after logout` → `fix-login-redirect`
+- `Add support for keyboard navigation` → `add-support-keyboard`
+- `Please update the installation documentation` → `update-installation-documentation`
+
+Collisions receive numeric suffixes (`-2`, `-3`, …), which do not count toward the three-word limit. Both checked and unchecked tasks currently in the file reserve their slugs. Removed slugs can be reused.
+
+Existing tasks without metadata receive persistent slug comments on first successful use, including listing. Explicit slugs are reserved before missing ones are generated. Existing stored slugs, including older slugs longer than three words, are preserved and remain valid references. Manually editing task text does not change stored slugs. Duplicate or malformed slug metadata is an error: repair the file manually rather than allowing an ambiguous check or silent renaming. A failed slug lookup and an already checked lookup do not annotate other tasks.
 
 Flag completion suggests `--all`, `--unchecked`, `--check`, and `--cleardone`. After `--check `, completion suggests unchecked slugs with task descriptions and filters by the typed prefix. It reads the current file each time, so manual edits and checks are reflected without reload. Completion never creates or writes the file; untagged tasks use the same provisional slugs that command execution will persist. If the file changes between completion and execution, the command operates on the current file.
 

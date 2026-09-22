@@ -27,6 +27,57 @@ test("slugs normalize, have a fallback, and remain unique against existing suffi
 	assert.equal(uniqueSlug("a".repeat(200), new Set()).length, 80);
 });
 
+test("slugs use at most three distinct keywords in task order", () => {
+	for (const [text, expected] of [
+		["Fix the login redirect after logout", "fix-login-redirect"],
+		["Add support for keyboard navigation", "add-support-keyboard"],
+		["Please update the installation documentation", "update-installation-documentation"],
+		["Kindly fix a bug in the login redirect", "fix-bug-login"],
+		["Fix FIX login login redirect redirect logout", "fix-login-redirect"],
+		["**Fix** the `Café` / CAFE redirect after logout!", "fix-cafe-redirect"],
+		["Update OAuth2 HTTP 500 handling", "update-oauth2-http"],
+		["Fix", "fix"],
+		["Add docs", "add-docs"],
+		["please the to and", "todo"],
+		["🎉 日本語", "todo"],
+		["", "todo"],
+	]) {
+		const slug = uniqueSlug(text, new Set());
+		assert.equal(slug, expected, text);
+		assert.ok(slug.split("-").length <= 3);
+	}
+	assert.equal(uniqueSlug("Fix the login redirect after logout", new Set([
+		"fix-login-redirect", "fix-login-redirect-2", "fix-login-redirect-4",
+	])), "fix-login-redirect-3");
+	assert.equal(uniqueSlug("please the to", new Set(["todo", "todo-2"])), "todo-3");
+	assert.equal(uniqueSlug(`${"x".repeat(79)} more words`, new Set()), "x".repeat(79));
+});
+
+test("existing long slugs remain valid, unchanged, and checkable", () => {
+	const slug = "fix-the-login-redirect-after-logout";
+	const source = `- [ ] Renamed task <!-- todo:${slug} -->\n`;
+	assert.equal(run(source).content, source);
+	assert.equal(todoCompletions(source, "--check fix-the-")[0].value, `--check ${slug}`);
+	assert.equal(run(source, `--check ${slug}`).content, source.replace("[ ]", "[x]"));
+});
+
+test("short provisional slugs match persisted and added slugs, reserving checked collisions", () => {
+	const text = "Fix the login redirect after logout";
+	const source = `- [ ] ${text}\n- [x] Earlier task <!-- todo:fix-login-redirect -->\n`;
+	const before = todoCompletions(source, "--check fix-login-");
+	assert.deepEqual(before.map((item) => item.value), ["--check fix-login-redirect-2"]);
+	assert.equal(before[0].description, text);
+	const persisted = run(source).content;
+	assert.deepEqual(todoCompletions(persisted, "--check fix-login-"), before);
+	assert.equal(run(persisted).content, persisted);
+	const added = run(persisted, "Fix login redirect on timeout");
+	assert.match(added.output, /^Added fix-login-redirect-3 —/);
+	assert.deepEqual(parseTodoDocument(added.content).items.map((item) => item.slug), [
+		"fix-login-redirect-2", "fix-login-redirect", "fix-login-redirect-3",
+	]);
+	assert.equal(run("", text).content, `- [ ] ${text} <!-- todo:fix-login-redirect -->\n`);
+});
+
 test("existing tasks get stable slugs, reserving explicit slugs before generating any", () => {
 	const source = "# TODO\n\n- [ ] Fix\n- [x] Fix <!-- todo:fix -->\n- [ ] Fix\n";
 	const first = run(source);

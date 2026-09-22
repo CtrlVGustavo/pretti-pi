@@ -24,6 +24,12 @@ export interface TodoDocument { bom: string; lines: Line[]; items: TodoItem[]; n
 export interface TodoResult { content: string; output: string; error?: boolean }
 
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+// A small English filler list, not semantic summarization; keep task-specific verbs and nouns.
+const SLUG_FILLER_WORDS = new Set([
+	"a", "an", "and", "are", "as", "at", "be", "been", "being", "by", "for", "from",
+	"in", "into", "is", "it", "kindly", "of", "on", "or", "please", "that", "the",
+	"these", "this", "those", "to", "was", "were", "with",
+]);
 const CONTROLS = /[\x00-\x1f\x7f-\x9f]/;
 
 /** File text is untrusted terminal input; never render its escape sequences. */
@@ -47,8 +53,9 @@ export function parseTodoCommand(args: string): TodoCommand {
 }
 
 export function uniqueSlug(text: string, used: ReadonlySet<string>): string {
-	const base = text.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase()
-		.replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 80).replace(/-$/, "") || "todo";
+	const words = text.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().match(/[a-z0-9]+/g) ?? [];
+	const keywords = [...new Set(words.filter((word) => !SLUG_FILLER_WORDS.has(word)))].slice(0, 3);
+	const base = keywords.join("-").slice(0, 80).replace(/-$/, "") || "todo";
 	let slug = base;
 	for (let suffix = 2; used.has(slug); suffix++) slug = `${base}-${suffix}`;
 	return slug;
